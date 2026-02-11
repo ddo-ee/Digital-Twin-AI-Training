@@ -1,0 +1,21 @@
+# --- Ignore the Dataset Images & Labels ---
+# This assumes your data is in a folder named 'datasets' or similar
+datasets/
+*.jpg
+*.jpeg
+*.png
+*.txt
+*.mp4
+*.mkv
+*.ini
+
+
+# --- Keep the AI Models (Do NOT ignore) ---
+# We leave *.pt out of this file so Git WILL track them
+# Note: Ensure your .pt file is under 100MB to avoid GitHub's hard limit
+
+# --- Ignore Training Logs & Temp Files ---
+runs/
+__pycache__/
+.vscode/
+.DS_Store
