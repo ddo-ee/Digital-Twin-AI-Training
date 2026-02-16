@@ -97,6 +97,16 @@
         @keyframes zoomIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         
         .modal-content { max-width: 90%; max-height: 90%; border-radius: 8px; overflow: hidden; position: relative; border: 2px solid #bb86fc; }
+        #modalImg {
+            max-width: 100%; 
+            max-height: 90vh; /* Limit height to 90% of screen */
+            width: auto;      /* Let width adjust automatically */
+            height: auto;     /* Let height adjust automatically */
+            border: 2px solid #bb86fc;
+            border-radius: 8px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+            object-fit: contain; 
+        }/* The magic property */
         .close-modal { position: absolute; top: 20px; right: 30px; color: white; font-size: 40px; font-weight: bold; cursor: pointer; z-index: 3001; }
 
         /* --- DASHBOARD --- */
@@ -114,10 +124,10 @@
 <body>
 
     <div id="videoModal" class="modal" onclick="closeModal()">
-        <span class="close-modal">&times;</span>
-        <div class="modal-content">
-            <img id="modalImg" src="" style="width: 100%; display: block;">
-        </div>
+            <span class="close-modal">&times;</span>
+            <div class="modal-content">
+                <img id="modalImg" src="">
+            </div>
     </div>
 
     <div class="sidebar" id="sidebar">
