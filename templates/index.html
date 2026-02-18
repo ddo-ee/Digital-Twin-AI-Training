@@ -5,6 +5,7 @@
     <title>BatStateU Digital Twin AI Monitoring</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
@@ -62,11 +63,33 @@
         <div class="content-container">
             
         <div id="dashboard-view" class="view-section active">
-                        <h3 style="border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0; margin-bottom: 20px;">Real-time Campus Analytics</h3>
-                        <div class="dashboard-grid" id="dashboard-stats">
-                            <div class="stat-card"><h3>Loading Data...</h3></div>
-                        </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0; margin-bottom: 20px;">
+                    <h3 style="margin: 0;">Campus Analytics</h3>
+                    
+                    <div class="dashboard-tabs">
+                        <button id="tab-live" class="dash-tab active" onclick="switchDashTab('live')">Live Numbers</button>
+                        <button id="tab-history" class="dash-tab" onclick="switchDashTab('history')">Historical Charts</button>
                     </div>
+                </div>
+
+                <div class="dashboard-grid" id="dashboard-stats">
+                    <div class="stat-card"><h3>Loading Data...</h3></div>
+                </div>
+
+                <div id="dashboard-charts" style="display: none;">
+                    
+                    <div class="chart-wrapper">
+                        <h3 style="color: #03dac6; margin-top: 0;">Overall Campus Traffic</h3>
+                        <canvas id="campusChart" height="80"></canvas>
+                    </div>
+
+                    <h3 style="color: #fff; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;">Building Breakdown</h3>
+                    <div class="dashboard-grid" id="zone-charts-container">
+                        </div>
+
+                </div>
+            </div>
 
             <div id="zones-view" class="view-section">
                 <h3 style="border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0;">Select a Camera Zone</h3>
@@ -239,6 +262,80 @@
                 }
             } catch (e) { console.log("API Error", e); }
         }, 1000);
+
+        // --- 5. CHART.JS HISTORICAL DATA LOGIC ---
+        let campusChartInstance = null;
+        let zoneChartInstances = {};
+
+        function switchDashTab(tab) {
+            // Update buttons
+            document.getElementById('tab-live').classList.remove('active');
+            document.getElementById('tab-history').classList.remove('active');
+            document.getElementById('tab-' + tab).classList.add('active');
+
+            // Toggle visibility
+            if (tab === 'live') {
+                document.getElementById('dashboard-stats').style.display = 'grid';
+                document.getElementById('dashboard-charts').style.display = 'none';
+            } else {
+                document.getElementById('dashboard-stats').style.display = 'none';
+                document.getElementById('dashboard-charts').style.display = 'block';
+                loadCharts(); // Fetch the SQLite data when clicked!
+            }
+        }
+
+        async function loadCharts() {
+            try {
+                const res = await fetch('/api/history');
+                const data = await res.json();
+
+                // 1. Draw Campus Total Chart
+                const ctxCampus = document.getElementById('campusChart').getContext('2d');
+                if (campusChartInstance) campusChartInstance.destroy(); // Prevent overlapping
+                
+                campusChartInstance = new Chart(ctxCampus, {
+                    type: 'line',
+                    data: {
+                        labels: data.labels,
+                        datasets: [{
+                            label: 'Total People Detected',
+                            data: data.campus,
+                            borderColor: '#03dac6',
+                            backgroundColor: 'rgba(3, 218, 198, 0.1)',
+                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0
+                        }]
+                    },
+                    options: { scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } }, plugins: { legend: { display: false } } }
+                });
+
+                // 2. Draw Dynamic Zone Charts
+                const zoneContainer = document.getElementById('zone-charts-container');
+                zoneContainer.innerHTML = ''; // Clear old charts
+                
+                for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
+                    // Create HTML elements for each zone magically
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'chart-wrapper';
+                    wrapper.innerHTML = `<h3 style="color: #bb86fc; margin-top: 0; font-size:1rem;">${zoneName}</h3><canvas id="chart-${zoneName.replace(/\s+/g, '')}"></canvas>`;
+                    zoneContainer.appendChild(wrapper);
+
+                    // Draw the Chart
+                    const ctxZone = document.getElementById(`chart-${zoneName.replace(/\s+/g, '')}`).getContext('2d');
+                    new Chart(ctxZone, {
+                        type: 'line',
+                        data: {
+                            labels: data.labels,
+                            datasets: [{
+                                data: zoneCounts,
+                                borderColor: '#bb86fc',
+                                borderWidth: 2, tension: 0.3, pointRadius: 0
+                            }]
+                        },
+                        options: { scales: { y: { beginAtZero: true, display: false }, x: { display: false } }, plugins: { legend: { display: false } } }
+                    });
+                }
+            } catch (error) { console.error("Error loading charts", error); }
+        }
 
         window.onload = () => { switchView('dashboard'); };
     </script>

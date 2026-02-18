@@ -101,7 +101,7 @@ def camera_worker(camera_id, source):
         
         frame_counter += 1
         
-        if frame_counter % 2 == 0:
+        if frame_counter % 1 == 0:
             frame = cv2.resize(frame, (640, 360)) 
             
             with model_lock:
@@ -206,6 +206,41 @@ def remove_camera(camera_id):
 def get_stats():
     data = { cid: {"name": i['name'], "count": i['count'], "group": i['group']} for cid, i in active_cameras.items() }
     return jsonify(data)
+
+@app.route('/api/history')
+def get_history():
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        
+        # 1. Get the last 20 overall campus totals
+        c.execute("SELECT timestamp, total_count FROM campus_logs ORDER BY id DESC LIMIT 20")
+        campus_data = c.fetchall()[::-1] # Reverse list so oldest is on the left of the chart
+        
+        # 2. Get the recent zone data
+        c.execute("SELECT timestamp, zone_name, count FROM zone_logs ORDER BY id DESC LIMIT 200")
+        zone_data = c.fetchall()[::-1]
+
+    # Format the time labels (extract just the HH:MM:SS part)
+    labels = [row[0].split(" ")[1] for row in campus_data]
+    campus_counts = [row[1] for row in campus_data]
+    
+    # Group the zone data dynamically
+    zones = {}
+    for row in zone_data:
+        z_name = row[1]
+        z_count = row[2]
+        if z_name not in zones:
+            zones[z_name] = []
+        zones[z_name].append(z_count)
+        # Keep zone arrays the same length as labels (last 20 entries)
+        if len(zones[z_name]) > 20:
+            zones[z_name] = zones[z_name][-20:]
+
+    return jsonify({
+        "labels": labels,
+        "campus": campus_counts,
+        "zones": zones
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
