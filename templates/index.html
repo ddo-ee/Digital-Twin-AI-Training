@@ -2,60 +2,80 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>BatStateU Digital Twin AI Monitoring System</title>
+    <title>BatStateU Digital Twin AI Monitoring</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .zone-header { font-size: 0.75rem; color: #888; letter-spacing: 1px; margin: 15px 0 5px 20px; font-weight: bold; }
+        .empty-state { text-align: center; color: #888; margin-top: 50px; display: none; }
+        
+        .zone-folder {
+            background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 25px;
+            text-align: center; cursor: pointer; transition: 0.3s;
+        }
+        .zone-folder:hover { background: #2a2a2a; border-color: #03dac6; transform: translateY(-3px); }
+        .zone-folder i { font-size: 3rem; color: #03dac6; margin-bottom: 15px; }
+        .zone-folder h3 { margin: 0; color: #fff; font-size: 1.2rem; }
 
+        /* --- FULL SCREEN MODAL STYLES --- */
+        .modal {
+            display: none; position: fixed; z-index: 9999; left: 0; top: 0;
+            width: 100%; height: 100%; background-color: rgba(0,0,0,0.9);
+            align-items: center; justify-content: center; flex-direction: column;
+        }
+        .modal.show { display: flex; }
+        .modal-content { max-width: 100%; max-height: 100vh; border: 3px solid #03dac6; border-radius: 8px; }
+        .close-modal {
+            position: absolute; top: 20px; right: 40px; color: white;
+            font-size: 40px; font-weight: bold; cursor: pointer; transition: 0.2s;
+        }
+        .close-modal:hover { color: #cf6679; }
+        
+        /* Make images look clickable */
+        .cam-feed { cursor: pointer; transition: 0.2s; }
+        .cam-feed:hover { opacity: 0.8; border-color: #03dac6; }
+    </style>
 </head>
 <body>
 
     <div id="videoModal" class="modal" onclick="closeModal()">
-            <span class="close-modal">&times;</span>
-            <div class="modal-content">
-                <img id="modalImg" src="">
-            </div>
+        <span class="close-modal">&times;</span>
+        <img id="modalImg" class="modal-content" src="">
+        <h2 id="modalTitle" style="color: white; margin-top: 15px;">Camera Feed</h2>
     </div>
 
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            <img src="{{ url_for('static', filename='bsuLogo.png') }}" class="sidebar-logo">
-
+            <img src="{{ url_for('static', filename='bsuLogo.png') }}" class="sidebar-logo" alt="Logo">
             <div class="header-text">
                 <span class="main-title">Digital Twin</span>
-                <span class="sub-title">AI Monitoring System</span>
+                <span class="sub-title">AI Command Center</span>
             </div>
         </div>
+        
         <ul class="menu">
-            <li class="menu-item"><a class="menu-link active" onclick="switchView('live')"><div class="menu-icon"><i class="fas fa-video"></i></div><span class="menu-text">Live Viewer</span></a></li>
-            <li class="menu-item"><a class="menu-link" onclick="switchView('dashboard')"><div class="menu-icon"><i class="fas fa-chart-line"></i></div><span class="menu-text">Dashboard</span></a></li>
+            <li class="menu-item"><a class="menu-link" id="nav-dashboard" onclick="switchView('dashboard')"><div class="menu-icon"><i class="fas fa-chart-line"></i></div><span class="menu-text">Campus Dashboard</span></a></li>
+            <li class="menu-item"><a class="menu-link" id="nav-zones" onclick="showZones()"><div class="menu-icon"><i class="fas fa-video"></i></div><span class="menu-text">Live Viewer</span></a></li>
+            
+            <div class="zone-header">SYSTEM</div>
             <li class="menu-item" id="manage-drop">
                 <a class="menu-link" onclick="toggleDropdown('manage-drop')"><div class="menu-icon"><i class="fas fa-sliders-h"></i></div><span class="menu-text">Manage Streams</span><i class="fas fa-chevron-down dropdown-arrow"></i></a>
                 <div class="dropdown-content">
                     <form action="/add_camera" method="POST">
-                        <label style="font-size: 0.8rem; color: #aaa;">Location Name</label>
-                        <input type="text" name="camera_name" required>
-                        <label style="font-size: 0.8rem; color: #aaa;">RTSP Link (or '0')</label>
-                        <input type="text" name="camera_url" required>
-                        <label style="font-size: 0.8rem; color: #aaa;">Building / Area</label>
+                        <input type="text" name="camera_name" placeholder="Location Name" required>
+                        <input type="text" name="camera_url" placeholder="RTSP Link or '0'" required>
                         <select name="camera_group">
                             <option value="Gate">Gate</option>
                             <option value="CICS Building">CICS Building</option>
                             <option value="Albert Einstein Building">Albert Einstein Building</option>
-                            <option value="CET">Library</option>
+                            <option value="CEAFA Building">CEAFA Building</option>
+                            <option value="Library">Library</option>
                             <option value="Gymnasium">Gymnasium</option>
-                            <option value="Hallway">Hallway</option>
+                            <option value="Pathways">Pathways</option>
                             <option value="Parking">Parking</option>
                         </select>
                         <button type="submit" class="action-btn">Add Stream</button>
                     </form>
-                </div>
-            </li>
-            <li class="menu-item" id="status-drop">
-                <a class="menu-link" onclick="toggleDropdown('status-drop')"><div class="menu-icon"><i class="fas fa-server"></i></div><span class="menu-text">System Status</span><i class="fas fa-chevron-down dropdown-arrow"></i></a>
-                <div class="dropdown-content">
-                    <p style="margin: 5px 0;">Active Cams: <strong id="status-cam-count">{{ cameras|length }}</strong></p>
-                    <p style="margin: 5px 0;">Server: <span style="color:#03dac6">Online</span></p>
-                    <p style="margin: 5px 0; font-size: 0.8rem; color:#aaa;">Uptime: <span id="uptime">00:00:00</span></p>
                 </div>
             </li>
         </ul>
@@ -64,88 +84,151 @@
     <div class="main-area">
         <div class="top-strip">
             <button onclick="document.getElementById('sidebar').classList.toggle('collapsed')" style="background:none; border:none; color:white; font-size:1.5rem; cursor:pointer; margin-right:15px;"><i class="fas fa-bars"></i></button>
-            <h2 class="view-title" id="page-title">Live Viewer</h2>
-
-            <div id="grid-controls-panel" class="grid-controls">
-                <span style="font-size: 0.8rem; color: #aaa;">GRID:</span>
-                <button class="grid-btn" onclick="setGrid(1)">1</button>
-                <button class="grid-btn" onclick="setGrid(2)">2</button>
-                <button class="grid-btn" onclick="setGrid(3)">3</button>
-                <button class="grid-btn" onclick="setGrid(4)">4</button>
-                <button class="grid-btn" onclick="setGrid(5)">5</button>
-                <button class="grid-btn" onclick="setGrid(6)">6</button>
-            </div>
+            <h2 class="view-title" id="page-title">Campus Dashboard</h2>
         </div>
 
         <div class="content-container">
-            <div id="live-view" class="view-section active">
+            
+            <div id="dashboard-view" class="view-section active">
+                <h3 style="border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0;">Real-time Campus Analytics</h3>
+                <div class="dashboard-grid" id="dashboard-stats">
+                    <div class="stat-card"><h3>Loading Data...</h3></div>
+                </div>
+            </div>
+
+            <div id="zones-view" class="view-section">
+                <h3 style="border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0;">Select a Camera Zone</h3>
+                
+                {% set unique_groups = [] %}
+                {% for cam_id, info in cameras.items() %}
+                    {% if info.group not in unique_groups %}
+                        {% set _ = unique_groups.append(info.group) %}
+                    {% endif %}
+                {% endfor %}
+
+                {% if unique_groups|length == 0 %}
+                    <div class="empty-state" style="display:block;">
+                        <h3>No cameras connected.</h3>
+                        <p>Use "Manage Streams" in the sidebar to add your first camera.</p>
+                    </div>
+                {% else %}
+                    <div class="dashboard-grid">
+                        {% for group in unique_groups %}
+                        <div class="zone-folder" onclick="viewZone('{{ group }}')">
+                            <i class="fas fa-building"></i>
+                            <h3>{{ group }}</h3>
+                            <p style="color: #888; font-size: 0.85rem; margin-top: 5px;">Click to view streams</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+
+            <div id="live-view" class="view-section">
+                
+                <button onclick="showZones()" style="background: #333; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; margin-bottom: 20px; font-weight: bold;">
+                    <i class="fas fa-arrow-left"></i> Back to Zones
+                </button>
+
+                <div id="empty-message" class="empty-state">
+                    <h3>No cameras found in this zone.</h3>
+                </div>
+
                 <div class="grid-container" id="video-grid">
                     {% for cam_id, info in cameras.items() %}
-                    <div class="video-card" onclick="openModal('{{ url_for('video_feed', camera_id=cam_id) }}')">
+                    <div class="video-card cam-card" data-group="{{ info.group }}">
                         <div class="video-header">
-                            <div><span class="badge badge-group">{{ info.group }}</span><span style="font-weight:bold; text-shadow:0 1px 3px black;">{{ info.name }}</span></div>
-                            <div><span class="badge" id="count-live-{{ cam_id }}">People: 0</span>
-                            <a href="/remove_camera/{{ cam_id }}" onclick="event.stopPropagation()" style="color:#cf6679; margin-left:10px;"><i class="fas fa-trash"></i></a></div>
+                            <div><span style="font-weight:bold; margin-left:8px;">{{ info.name }}</span></div>
+                            <div>
+                                <span class="badge" id="count-live-{{ cam_id }}">People: {{ info.count }}</span>
+                                <span onclick="window.location.href='/remove_camera/{{ cam_id }}'" style="color:#cf6679; margin-left:10px; cursor: pointer;" title="Remove Camera">
+                                    <i class="fas fa-trash"></i>
+                                </span>
+                            </div>
                         </div>
-                        <img src="{{ url_for('video_feed', camera_id=cam_id) }}" class="feed">
+                        
+                        {% if loop.index > 6 %}
+                            <img class="feed cam-feed" data-src="http://127.0.0.1:5000/video_feed/{{ cam_id }}" src="" onclick="openModal(this, '{{ info.name }}')">
+                        {% else %}
+                            <img class="feed cam-feed" data-src="http://localhost:5000/video_feed/{{ cam_id }}" src="" onclick="openModal(this, '{{ info.name }}')">
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
             </div>
 
-            <div id="dashboard-view" class="view-section">
-                <h3 style="border-bottom: 1px solid #444; padding-bottom: 10px;">Real-time Analytics</h3>
-                <div class="dashboard-grid" id="dashboard-stats"><div class="stat-card"><h3>Loading Data...</h3></div></div>
-            </div>
         </div>
     </div>
 
     <script>
-        // --- MODAL LOGIC ---
-        function openModal(imgSrc) {
+        // --- 0. FULL SCREEN MODAL LOGIC ---
+        function openModal(imgElement, camName) {
+            // Only open if the image actually has a running video stream
+            if (!imgElement.src || imgElement.src.endsWith(window.location.host + '/')) return;
+            
             const modal = document.getElementById("videoModal");
             const modalImg = document.getElementById("modalImg");
+            const modalTitle = document.getElementById("modalTitle");
+            
+            modalImg.src = imgElement.src;
+            modalTitle.innerText = camName + " (Live)";
             modal.classList.add("show");
-            modalImg.src = imgSrc;
         }
+
         function closeModal() {
             document.getElementById("videoModal").classList.remove("show");
         }
 
-        // --- GRID LOGIC ---
-        function setGrid(columns) {
-            const grid = document.getElementById('video-grid');
-            const buttons = document.querySelectorAll('.grid-btn');
+        // --- 1. SHOW ZONES DIRECTORY ---
+        function showZones() {
+            switchView('zones');
+            document.getElementById('page-title').innerText = "Live Viewer: Area Selection";
+            document.getElementById('nav-zones').classList.add('active');
             
-            // Update Active Button
-            buttons.forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
-
-            if (columns === 0) {
-                // Auto (Responsive)
-                grid.style.gridTemplateColumns = "repeat(auto-fill, minmax(400px, 1fr))";
-            } else {
-                // Fixed Columns (1, 2, or 3)
-                grid.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
-            }
+            document.querySelectorAll('.cam-feed').forEach(img => img.src = "");
         }
 
-        // --- NAVIGATION ---
+        // --- 2. ENTER A SPECIFIC ZONE ---
+        function viewZone(zoneName) {
+            switchView('live'); 
+            document.getElementById('page-title').innerText = "Live Viewer: " + zoneName;
+            document.getElementById('nav-zones').classList.add('active'); 
+
+            const cards = document.querySelectorAll('.cam-card');
+            let visibleCount = 0;
+
+            cards.forEach(card => {
+                const group = card.getAttribute('data-group');
+                const img = card.querySelector('.cam-feed');
+                const videoSource = img.getAttribute('data-src');
+
+                if (group === zoneName) {
+                    card.style.display = 'block';
+                    if (img.src !== videoSource) {
+                        img.src = videoSource; 
+                    }
+                    visibleCount++;
+                } else {
+                    card.style.display = 'none';
+                    img.src = ""; 
+                }
+            });
+
+            document.getElementById('empty-message').style.display = visibleCount === 0 ? 'block' : 'none';
+        }
+
+        // --- 3. VIEW SWITCHING LOGIC ---
         function switchView(viewName) {
-            const titleMap = { 'live': 'Live Viewer', 'dashboard': 'Crowd Analytics Dashboard' };
-            document.getElementById('page-title').innerText = titleMap[viewName];
-            
             document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.menu-link').forEach(el => el.classList.remove('active'));
+            
             document.getElementById(viewName + '-view').classList.add('active');
             
-            if(viewName === 'live') {
-                document.querySelector("a[onclick=\"switchView('live')\"]").classList.add('active');
-                document.getElementById('grid-controls-panel').style.display = 'flex'; // Show controls
-            }
-            if(viewName === 'dashboard') {
-                document.querySelector("a[onclick=\"switchView('dashboard')\"]").classList.add('active');
-                document.getElementById('grid-controls-panel').style.display = 'none'; // Hide controls
+            if (viewName === 'dashboard') {
+                document.getElementById('page-title').innerText = "Campus Dashboard";
+                document.getElementById('nav-dashboard').classList.add('active');
+                
+                document.querySelectorAll('.cam-feed').forEach(img => img.src = "");
             }
         }
 
@@ -155,6 +238,7 @@
             item.querySelector('.dropdown-content').classList.toggle('show');
         }
 
+        // --- 4. BACKGROUND ANALYTICS POLLING ---
         setInterval(async () => {
             try {
                 const response = await fetch('/api/stats');
@@ -165,28 +249,32 @@
                 for (const [camId, info] of Object.entries(data)) {
                     const badge = document.getElementById(`count-live-${camId}`);
                     if (badge) badge.innerText = `People: ${info.count}`;
+                    
                     if (!groups[info.group]) groups[info.group] = 0;
                     groups[info.group] += info.count;
                     totalPeople += info.count;
                 }
 
-                const dashGrid = document.getElementById('dashboard-stats');
                 if (document.getElementById('dashboard-view').classList.contains('active')) {
-                    let html = `<div class="stat-card" style="border-color: #bb86fc;"><h3>TOTAL CAMPUS COUNT</h3><p class="stat-value" style="color: #bb86fc;">${totalPeople}</p><p class="stat-sub">Across all active cameras</p></div>`;
+                    let html = `<div class="stat-card" style="border-color: #03dac6;">
+                                    <h3>TOTAL CAMPUS COUNT</h3>
+                                    <p class="stat-value" style="color: #03dac6;">${totalPeople}</p>
+                                    <p class="stat-sub">Across all connected cameras</p>
+                                </div>`;
+                    
                     for (const [groupName, count] of Object.entries(groups)) {
-                        html += `<div class="stat-card"><h3>${groupName}</h3><p class="stat-value">${count}</p><p class="stat-sub">Active detections</p></div>`;
+                        html += `<div class="stat-card">
+                                    <h3>${groupName}</h3>
+                                    <p class="stat-value">${count}</p>
+                                    <p class="stat-sub">Active detections</p>
+                                 </div>`;
                     }
-                    dashGrid.innerHTML = html;
+                    document.getElementById('dashboard-stats').innerHTML = html;
                 }
-            } catch (e) { console.log(e); }
+            } catch (e) { console.log("API Error", e); }
         }, 1000);
 
-        let sec = 0;
-        setInterval(() => {
-            sec++;
-            const date = new Date(0); date.setSeconds(sec);
-            document.getElementById('uptime').innerText = date.toISOString().substr(11, 8);
-        }, 1000);
+        window.onload = () => { switchView('dashboard'); };
     </script>
 </body>
 </html>
