@@ -1,3 +1,4 @@
+from cProfile import label
 import sqlite3
 import time
 import cv2
@@ -131,7 +132,7 @@ def camera_worker(camera_id, source):
             with model_lock:
                 results = model(frame, conf=0.4, imgsz=640, verbose=False)
             
-            annotated_frame = results[0].plot()
+            annotated_frame = results[0].plot(labels=False)
             person_count = len(results[0].boxes)
 
             if camera_id in active_cameras:
