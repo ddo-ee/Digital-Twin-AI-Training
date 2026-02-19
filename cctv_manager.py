@@ -1,6 +1,7 @@
 import sqlite3
 import time
 import cv2
+import numpy as np
 import threading
 from threading import Lock
 from flask import Flask, render_template, Response, request, jsonify, redirect, url_for
@@ -88,20 +89,41 @@ threading.Thread(target=analytics_logger, daemon=True).start()
 
 
 # --- THE BACKGROUND AI WORKER ---
+# --- THE BACKGROUND AI WORKER ---
 def camera_worker(camera_id, source):
     cap = cv2.VideoCapture(source if source != '0' else 0)
     frame_counter = 0
     
     while thread_run_flags.get(camera_id, False):
         success, frame = cap.read()
+        
+        # --- NEW: THE "OFFLINE" CATCHER ---
         if not success:
-            time.sleep(1)
+            # 1. Create a pure black image (Height: 360, Width: 640, 3 Color Channels)
+            offline_frame = np.zeros((360, 640, 3), dtype=np.uint8)
+            
+            # 2. Add Red "CAMERA OFFLINE" text to the center
+            text = "CAMERA OFFLINE"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text_size = cv2.getTextSize(text, font, 1, 1)[0]
+            text_x = (640 - text_size[0]) // 2
+            text_y = (360 + text_size[1]) // 2
+            cv2.putText(offline_frame, text, (text_x, text_y), font, 1, (0, 0, 255), 1)
+            
+            # 3. Save this black frame to the Web Buffer so the UI sees it instantly!
+            ret, buffer = cv2.imencode('.jpg', offline_frame)
+            if ret:
+                global_frame_buffer[camera_id] = buffer.tobytes()
+            
+            # 4. Wait 2 seconds, then try to reconnect to the broken camera
+            time.sleep(2)
             cap.open(source if source != '0' else 0)
             continue
+        # ----------------------------------
         
         frame_counter += 1
         
-        if frame_counter % 1 == 0:
+        if frame_counter % 5 == 0:
             frame = cv2.resize(frame, (640, 360)) 
             
             with model_lock:

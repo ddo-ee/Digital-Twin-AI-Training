@@ -14,6 +14,13 @@
         <img id="modalImg" class="modal-content" src="">
         <h2 id="modalTitle" style="color: white; margin-top: 15px;">Camera Feed</h2>
     </div>
+    <div id="chartModal" class="modal" onclick="closeChartModal(event)">
+        <span class="close-modal" onclick="closeChartModal(event)">&times;</span>
+        <div class="modal-content" style="background: #1e1e1e; padding: 25px; width: 80vw; max-width: 1000px; border-color: #bb86fc;">
+            <h2 id="chartModalTitle" style="color: #bb86fc; margin-top: 0; margin-bottom: 20px;">Zone Traffic History</h2>
+            <canvas id="largeZoneChart" height="100"></canvas>
+        </div>
+    </div>
 
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
@@ -40,8 +47,8 @@
                             <option value="CICS Building">CICS Building</option>
                             <option value="Albert Einstein Building">Albert Einstein Building</option>
                             <option value="Steerhub Building">Steerhub Building</option>
-                            <option value="CET">CET</option>
-                            <option value="RGR">RGR</option>
+                            <option value="CET Building">CET Building</option>
+                            <option value="RGR Building">RGR Building</option>
                             <option value="Gymnasium">Gymnasium</option>
                             <option value="Pathways">Pathways</option>
                             <option value="Parking">Parking</option>
@@ -109,8 +116,15 @@
                 {% else %}
                     <div class="dashboard-grid">
                         {% for group in unique_groups %}
+                        
+                        {% set icon_class = 'fa-building' %}
+                        {% if 'Parking' in group %} {% set icon_class = 'fa-car' %}
+                        {% elif 'Gate' in group %} {% set icon_class = 'fa-archway' %}
+                        {% elif 'Pathway' in group %} {% set icon_class = 'fa-road' %}
+                        {% endif %}
+
                         <div class="zone-folder" onclick="viewZone('{{ group }}')">
-                            <i class="fas fa-building"></i>
+                            <i class="fas {{ icon_class }}"></i>
                             <h3>{{ group }}</h3>
                             <p style="color: #888; font-size: 0.85rem; margin-top: 5px;">Click to view streams</p>
                         </div>
@@ -265,76 +279,148 @@
 
         // --- 5. CHART.JS HISTORICAL DATA LOGIC ---
         let campusChartInstance = null;
-        let zoneChartInstances = {};
+        let zoneChartInstances = {}; // Track all small charts
+        let currentChartData = null; 
+        let largeChartInstance = null; 
+        let chartUpdateTimer = null; // The 5-second loop
 
         function switchDashTab(tab) {
-            // Update buttons
             document.getElementById('tab-live').classList.remove('active');
             document.getElementById('tab-history').classList.remove('active');
             document.getElementById('tab-' + tab).classList.add('active');
 
-            // Toggle visibility
             if (tab === 'live') {
                 document.getElementById('dashboard-stats').style.display = 'grid';
                 document.getElementById('dashboard-charts').style.display = 'none';
+                
+                // Stop the timer when looking at Live Numbers to save CPU
+                if (chartUpdateTimer) clearInterval(chartUpdateTimer); 
             } else {
                 document.getElementById('dashboard-stats').style.display = 'none';
                 document.getElementById('dashboard-charts').style.display = 'block';
-                loadCharts(); // Fetch the SQLite data when clicked!
+                
+                loadCharts(true); // Initial Draw (builds the HTML)
+                
+                // Start the 5-second auto-update loop!
+                if (chartUpdateTimer) clearInterval(chartUpdateTimer);
+                chartUpdateTimer = setInterval(() => loadCharts(false), 5000); 
             }
         }
 
-        async function loadCharts() {
+        async function loadCharts(isInitialLoad = false) {
             try {
                 const res = await fetch('/api/history');
-                const data = await res.json();
+                currentChartData = await res.json();
+                const data = currentChartData;
 
-                // 1. Draw Campus Total Chart
-                const ctxCampus = document.getElementById('campusChart').getContext('2d');
-                if (campusChartInstance) campusChartInstance.destroy(); // Prevent overlapping
-                
-                campusChartInstance = new Chart(ctxCampus, {
-                    type: 'line',
-                    data: {
-                        labels: data.labels,
-                        datasets: [{
-                            label: 'Total People Detected',
-                            data: data.campus,
-                            borderColor: '#03dac6',
-                            backgroundColor: 'rgba(3, 218, 198, 0.1)',
-                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0
-                        }]
-                    },
-                    options: { scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } }, plugins: { legend: { display: false } } }
-                });
-
-                // 2. Draw Dynamic Zone Charts
-                const zoneContainer = document.getElementById('zone-charts-container');
-                zoneContainer.innerHTML = ''; // Clear old charts
-                
-                for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
-                    // Create HTML elements for each zone magically
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'chart-wrapper';
-                    wrapper.innerHTML = `<h3 style="color: #bb86fc; margin-top: 0; font-size:1rem;">${zoneName}</h3><canvas id="chart-${zoneName.replace(/\s+/g, '')}"></canvas>`;
-                    zoneContainer.appendChild(wrapper);
-
-                    // Draw the Chart
-                    const ctxZone = document.getElementById(`chart-${zoneName.replace(/\s+/g, '')}`).getContext('2d');
-                    new Chart(ctxZone, {
+                // 1. UPDATE OR DRAW CAMPUS CHART
+                if (!campusChartInstance) {
+                    const ctxCampus = document.getElementById('campusChart').getContext('2d');
+                    campusChartInstance = new Chart(ctxCampus, {
                         type: 'line',
                         data: {
                             labels: data.labels,
                             datasets: [{
-                                data: zoneCounts,
-                                borderColor: '#bb86fc',
-                                borderWidth: 2, tension: 0.3, pointRadius: 0
+                                label: 'Total People Detected', data: data.campus,
+                                borderColor: '#03dac6', backgroundColor: 'rgba(3, 218, 198, 0.1)',
+                                borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0
                             }]
                         },
-                        options: { scales: { y: { beginAtZero: true, display: false }, x: { display: false } }, plugins: { legend: { display: false } } }
+                        options: { scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } }, plugins: { legend: { display: false } } }
                     });
+                } else {
+                    // Smoothly slide the new data in
+                    campusChartInstance.data.labels = data.labels;
+                    campusChartInstance.data.datasets[0].data = data.campus;
+                    campusChartInstance.update('none'); // 'none' disables the bouncing animation
                 }
+
+                // 2. UPDATE OR DRAW ZONE CHARTS
+                const zoneContainer = document.getElementById('zone-charts-container');
+                
+                if (isInitialLoad) {
+                    zoneContainer.innerHTML = ''; 
+                    zoneChartInstances = {}; 
+                    
+                    for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'chart-wrapper zone-chart-card'; 
+                        wrapper.onclick = () => openChartModal(zoneName);
+                        
+                        const safeId = zoneName.replace(/\s+/g, '');
+                        wrapper.innerHTML = `<h3 style="color: #bb86fc; margin-top: 0; font-size:1rem;">${zoneName}</h3><canvas id="chart-${safeId}"></canvas>`;
+                        zoneContainer.appendChild(wrapper);
+
+                        const ctxZone = document.getElementById(`chart-${safeId}`).getContext('2d');
+                        zoneChartInstances[zoneName] = new Chart(ctxZone, {
+                            type: 'line',
+                            data: { labels: data.labels, datasets: [{ data: zoneCounts, borderColor: '#bb86fc', borderWidth: 2, tension: 0.3, pointRadius: 0 }] },
+                            options: { scales: { y: { beginAtZero: true, display: false }, x: { display: false } }, plugins: { legend: { display: false } } }
+                        });
+                    }
+                } else {
+                    // Update the existing lines smoothly without flickering the HTML
+                    for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
+                        if (zoneChartInstances[zoneName]) {
+                            zoneChartInstances[zoneName].data.labels = data.labels;
+                            zoneChartInstances[zoneName].data.datasets[0].data = zoneCounts;
+                            zoneChartInstances[zoneName].update('none');
+                        } else {
+                            // If a new building was added while we were watching, force a full redraw
+                            loadCharts(true);
+                            return;
+                        }
+                    }
+                }
+
+                // 3. UPDATE FULLSCREEN CHART MODAL IF IT IS OPEN!
+                if (document.getElementById('chartModal').classList.contains('show') && largeChartInstance) {
+                    const titleText = document.getElementById('chartModalTitle').innerText;
+                    const activeZone = titleText.split(" - ")[0]; // Get just the name, e.g., "Library"
+                    
+                    if (data.zones[activeZone]) {
+                        largeChartInstance.data.labels = data.labels;
+                        largeChartInstance.data.datasets[0].data = data.zones[activeZone];
+                        largeChartInstance.update('none');
+                    }
+                }
+
             } catch (error) { console.error("Error loading charts", error); }
+        }
+
+        // --- 6. CHART MODAL LOGIC ---
+        function openChartModal(zoneName) {
+            if (!currentChartData || !currentChartData.zones[zoneName]) return;
+
+            document.getElementById('chartModal').classList.add('show');
+            document.getElementById('chartModalTitle').innerText = zoneName + " - Detailed Traffic History";
+
+            const ctx = document.getElementById('largeZoneChart').getContext('2d');
+            if (largeChartInstance) largeChartInstance.destroy(); 
+
+            largeChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: currentChartData.labels,
+                    datasets: [{
+                        label: 'Active Detections',
+                        data: currentChartData.zones[zoneName],
+                        borderColor: '#bb86fc',
+                        backgroundColor: 'rgba(187, 134, 252, 0.2)',
+                        borderWidth: 3, fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: { y: { beginAtZero: true, ticks: { color: '#aaa' }, grid: { color: '#333' } }, x: { ticks: { color: '#aaa' }, grid: { color: '#333' } } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function closeChartModal(e) {
+            if (e && e.target.id !== 'chartModal' && !e.target.classList.contains('close-modal')) return;
+            document.getElementById('chartModal').classList.remove('show');
         }
 
         window.onload = () => { switchView('dashboard'); };
