@@ -197,3 +197,14 @@ button.action-btn:hover {
     border-color: #bb86fc; 
     box-shadow: 0 4px 15px rgba(187, 134, 252, 0.2); 
 }
+
+/* --- COMPACT PAGINATION STYLES --- */
+.page-btn {
+    background: #222; border: 1px solid #444; color: #888;
+    width: 35px; height: 35px; border-radius: 5px; cursor: pointer;
+    font-weight: bold; transition: 0.3s; display: flex;
+    align-items: center; justify-content: center;
+}
+.page-btn:hover:not(:disabled) { border-color: #bb86fc; color: white; }
+.page-btn.active { background: #bb86fc; color: black; border-color: #bb86fc; }
+.page-btn:disabled { opacity: 0.3; cursor: not-allowed; }

@@ -13,7 +13,7 @@ CORS(app)
 
 # --- CONFIGURATION ---
 DB_NAME = "campus_security.db"
-model = YOLO("yolov11_v2.pt") # Or yolov8n.pt
+model = YOLO("yolov11_v2.engine") # Or yolov8n.pt
 model_lock = Lock()  
 
 active_cameras = {}
@@ -127,7 +127,7 @@ def camera_worker(camera_id, source):
             frame = cv2.resize(frame, (640, 360)) 
             
             with model_lock:
-                results = model(frame, conf=0.4, imgsz=320, verbose=False)
+                results = model(frame, conf=0.4, imgsz=640, verbose=False)
             
             annotated_frame = results[0].plot()
             person_count = len(results[0].boxes)

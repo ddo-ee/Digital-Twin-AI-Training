@@ -49,6 +49,7 @@
                             <option value="Steerhub Building">Steerhub Building</option>
                             <option value="CET Building">CET Building</option>
                             <option value="RGR Building">RGR Building</option>
+                            <option value="Student Center">Student Center</option>
                             <option value="Gymnasium">Gymnasium</option>
                             <option value="Pathways">Pathways</option>
                             <option value="Parking">Parking</option>
@@ -135,9 +136,20 @@
 
             <div id="live-view" class="view-section">
                 
-                <button onclick="showZones()" style="background: #333; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; margin-bottom: 20px; font-weight: bold;">
-                    <i class="fas fa-arrow-left"></i> Back to Zones
-                </button>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <button onclick="showZones()" style="background: #333; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                        <i class="fas fa-arrow-left"></i> Back to Zones
+                    </button>
+
+                    <div id="pagination-controls" style="display: none; gap: 8px; align-items: center;">
+                        <button class="page-btn" id="btn-prev" onclick="changePage(-1)"><i class="fas fa-chevron-left"></i></button>
+                        
+                        <div id="page-numbers" style="display: flex; gap: 5px;">
+                            </div>
+                        
+                        <button class="page-btn" id="btn-next" onclick="changePage(1)"><i class="fas fa-chevron-right"></i></button>
+                    </div>
+                </div>
 
                 <div id="empty-message" class="empty-state">
                     <h3>No cameras found in this zone.</h3>
@@ -164,6 +176,7 @@
                     </div>
                     {% endfor %}
                 </div>
+
             </div>
 
         </div>
@@ -194,31 +207,94 @@
             document.querySelectorAll('.cam-feed').forEach(img => img.src = "");
         }
 
-        // --- 2. ENTER A SPECIFIC ZONE ---
+        // --- 2. ENTER A SPECIFIC ZONE (WITH PAGINATION) ---
+        let currentPage = 1;
+        const camerasPerPage = 6;
+        let currentZoneCards = []; // Memory of cameras in the current building
+
         function viewZone(zoneName) {
             switchView('live'); 
             document.getElementById('page-title').innerText = "Live Viewer: " + zoneName;
             document.getElementById('nav-zones').classList.add('active'); 
 
-            const cards = document.querySelectorAll('.cam-card');
-            let visibleCount = 0;
+            const allCards = document.querySelectorAll('.cam-card');
+            currentZoneCards = []; // Reset the memory
 
-            cards.forEach(card => {
-                const group = card.getAttribute('data-group');
-                const img = card.querySelector('.cam-feed');
-                const videoSource = img.getAttribute('data-src');
-
-                if (group === zoneName) {
-                    card.style.display = 'block';
-                    if (img.src !== videoSource) { img.src = videoSource; }
-                    visibleCount++;
-                } else {
-                    card.style.display = 'none';
-                    img.src = ""; 
+            // 1. Instantly hide ALL cameras and kill ALL streams to save bandwidth
+            allCards.forEach(card => {
+                card.style.display = 'none';
+                card.querySelector('.cam-feed').src = ""; 
+                
+                // 2. If it belongs to this building, add it to our pagination list
+                if (card.getAttribute('data-group') === zoneName) {
+                    currentZoneCards.push(card);
                 }
             });
 
-            document.getElementById('empty-message').style.display = visibleCount === 0 ? 'block' : 'none';
+            document.getElementById('empty-message').style.display = currentZoneCards.length === 0 ? 'block' : 'none';
+            
+            // 3. Render the first page
+            if (currentZoneCards.length > 0) {
+                currentPage = 1; 
+                renderPage();
+            } else {
+                document.getElementById('pagination-controls').style.display = 'none';
+            }
+        }
+
+        // --- NEW: RENDER THE CURRENT PAGE ---
+        function renderPage() {
+            const totalPages = Math.ceil(currentZoneCards.length / camerasPerPage);
+            const startIndex = (currentPage - 1) * camerasPerPage;
+            const endIndex = startIndex + camerasPerPage;
+
+            currentZoneCards.forEach((card, index) => {
+                const img = card.querySelector('.cam-feed');
+                const videoSource = img.getAttribute('data-src');
+
+                if (index >= startIndex && index < endIndex) {
+                    card.style.display = 'block';
+                    if (img.src !== videoSource) { img.src = videoSource; } 
+                } else {
+                    card.style.display = 'none';
+                    img.src = ""; // Disconnect the stream to save laptop CPU
+                }
+            });
+
+            // Update the UI Buttons dynamically
+            if (totalPages > 1) {
+                document.getElementById('pagination-controls').style.display = 'flex';
+                
+                // 1. Generate the [1] [2] [3] Number Buttons
+                const pageNumbersDiv = document.getElementById('page-numbers');
+                pageNumbersDiv.innerHTML = ''; // Clear old numbers
+                
+                for (let i = 1; i <= totalPages; i++) {
+                    const btn = document.createElement('button');
+                    // Add the 'active' purple highlight if it is the current page
+                    btn.className = 'page-btn ' + (i === currentPage ? 'active' : '');
+                    btn.innerText = i;
+                    btn.onclick = () => goToPage(i); // Make the number clickable!
+                    pageNumbersDiv.appendChild(btn);
+                }
+
+                // 2. Disable/Enable the Arrow Buttons
+                document.getElementById('btn-prev').disabled = (currentPage === 1);
+                document.getElementById('btn-next').disabled = (currentPage === totalPages);
+            } else {
+                document.getElementById('pagination-controls').style.display = 'none';
+            }
+        }
+
+        // --- NEW: CHANGE PAGE LOGIC ---
+        function changePage(direction) {
+            currentPage += direction;
+            renderPage();
+        }
+
+        function goToPage(pageNum) {
+            currentPage = pageNum;
+            renderPage();
         }
 
         // --- 3. VIEW SWITCHING LOGIC ---
