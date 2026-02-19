@@ -7,6 +7,8 @@ from threading import Lock
 from flask import Flask, render_template, Response, request, jsonify, redirect, url_for
 from flask_cors import CORS
 from ultralytics import YOLO
+import os
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;2000000"
 
 app = Flask(__name__)
 CORS(app)
@@ -116,7 +118,7 @@ def camera_worker(camera_id, source):
                 global_frame_buffer[camera_id] = buffer.tobytes()
             
             # 4. Wait 2 seconds, then try to reconnect to the broken camera
-            time.sleep(2)
+            time.sleep(5)
             cap.open(source if source != '0' else 0)
             continue
         # ----------------------------------
