@@ -92,8 +92,7 @@ threading.Thread(target=analytics_logger, daemon=True).start()
 
 
 # --- THE BACKGROUND AI WORKER ---
-# --- THE BACKGROUND AI WORKER ---
-# --- THE ON-DEMAND AI WORKER ---
+
 def camera_worker(camera_id, source):
     cap = None
     frame_counter = 0
@@ -263,6 +262,17 @@ def toggle_group(group_name):
             
     return jsonify({"status": "success", "zone": group_name, "action": action})
 
+@app.route('/api/toggle_all', methods=['POST'])
+def toggle_all():
+    data = request.json
+    action = data.get('action') # Will be 'start' or 'stop'
+    
+    # Loop through EVERY camera and flip the switch
+    for cam_id, info in active_cameras.items():
+        info['is_active'] = (action == 'start')
+            
+    return jsonify({"status": "success", "action": action})
+
 @app.route('/api/toggle/<camera_id>', methods=['POST'])
 def toggle_camera(camera_id):
     if camera_id in active_cameras:
@@ -305,6 +315,52 @@ def get_history():
         "campus": campus_counts,
         "zones": zones
     })
+# ==========================================
+# --- DORMANT UNITY 3D INTEGRATION API ---
+# ==========================================
+@app.route('/api/unity')
+def get_unity_data():
+    now = time.time()
+    unity_payload = {
+        "campus": { "total_known_people": 0, "active_live_people": 0, "is_fully_live": True },
+        "zones": {},
+        "cameras": {}
+    }
+    
+    for cam_id, info in active_cameras.items():
+        count = info['count']
+        group = info['group']
+        is_active = info.get('is_active', False)
+        last_updated = info.get('last_updated', now)
+        
+        # 1. Package Cameras
+        unity_payload["cameras"][cam_id] = {
+            "name": info['name'],
+            "zone": group,
+            "count": count,
+            "is_active": is_active,
+            "seconds_since_update": round(now - last_updated, 1)
+        }
+        
+        # 2. Package Zones
+        if group not in unity_payload["zones"]:
+            unity_payload["zones"][group] = { "total_count": 0, "is_active": False, "seconds_since_update": 0 }
+        
+        unity_payload["zones"][group]["total_count"] += count
+        if is_active:
+            unity_payload["zones"][group]["is_active"] = True
+            unity_payload["zones"][group]["seconds_since_update"] = 0
+        elif (now - last_updated) < unity_payload["zones"][group].get("seconds_since_update", 999999):
+            unity_payload["zones"][group]["seconds_since_update"] = round(now - last_updated, 1)
+            
+        # 3. Package Campus Totals
+        unity_payload["campus"]["total_known_people"] += count
+        if is_active:
+            unity_payload["campus"]["active_live_people"] += count
+        else:
+            unity_payload["campus"]["is_fully_live"] = False
+            
+    return jsonify(unity_payload)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)

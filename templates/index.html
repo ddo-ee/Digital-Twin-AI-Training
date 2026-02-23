@@ -414,12 +414,16 @@ setInterval(async () => {
                     if (info.is_active) groupActive[info.group] = true; 
                 }
 
-                if (document.getElementById('dashboard-view').classList.contains('active')) {
+if (document.getElementById('dashboard-view').classList.contains('active')) {
                     
-                    // NEW: Dynamic Total Card Styling
-                    let totalCardBorder = allCamerasActive ? "#03dac6" : "#ffb86c"; // Green if 100% live, Orange if mixed
+                    let totalCardBorder = allCamerasActive ? "#03dac6" : "#ffb86c"; 
                     let activeSubtext = allCamerasActive ? "System is 100% Live" : "Contains paused historical data";
                     let icon = allCamerasActive ? "fa-check-circle" : "fa-exclamation-triangle";
+                    
+                    // NEW: Master Button Logic
+                    let masterBtnText = allCamerasActive ? "Pause All Cameras" : "Start All Cameras";
+                    let masterBtnColor = allCamerasActive ? "#cf6679" : "#03dac6";
+                    let masterAction = allCamerasActive ? "stop" : "start";
 
                     let html = `<div class="stat-card" style="border-color: ${totalCardBorder};">
                                     <h3 style="color: ${totalCardBorder};">CAMPUS OVERVIEW</h3>
@@ -438,7 +442,12 @@ setInterval(async () => {
                                     <p style="color: ${totalCardBorder}; font-size: 0.85rem; margin-top: 15px; font-weight: bold;">
                                         <i class="fas ${icon}"></i> ${activeSubtext}
                                     </p>
+                                    
+                                    <button onclick="toggleAll('${masterAction}')" style="margin-top: 10px; background: #222; color: ${masterBtnColor}; border: 1px solid ${masterBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
+                                        <i class="fas ${allCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${masterBtnText}
+                                    </button>
                                 </div>`;
+                    
                     
                     for (const [groupName, groupData] of Object.entries(groups)) {
                         let isActive = groupActive[groupName];
@@ -470,6 +479,7 @@ setInterval(async () => {
                 console.error("API Error in Polling Loop:", e); 
             }
         }, 1000);
+    
 
         // --- 5. CHART.JS HISTORICAL DATA LOGIC ---
         let campusChartInstance = null;
@@ -653,6 +663,16 @@ setInterval(async () => {
                 });
                 // The dashboard will automatically update the button color on the next 1-second tick!
             } catch (error) { console.error("Group toggle failed", error); }
+        }
+        // --- NEW: TOGGLE ALL CAMERAS (MASTER SWITCH) ---
+        async function toggleAll(action) {
+            try {
+                await fetch('/api/toggle_all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+            } catch (error) { console.error("Master toggle failed", error); }
         }
     </script>
 </body>
