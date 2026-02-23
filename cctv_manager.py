@@ -93,42 +93,55 @@ threading.Thread(target=analytics_logger, daemon=True).start()
 
 # --- THE BACKGROUND AI WORKER ---
 # --- THE BACKGROUND AI WORKER ---
+# --- THE ON-DEMAND AI WORKER ---
 def camera_worker(camera_id, source):
-    cap = cv2.VideoCapture(source if source != '0' else 0)
+    cap = None
     frame_counter = 0
     
     while thread_run_flags.get(camera_id, False):
+        
+        # 1. THE MANUAL TOGGLE CHECK
+        if not active_cameras.get(camera_id, {}).get('is_active', False):
+            if cap is not None:
+                cap.release() # Drop the network connection!
+                cap = None
+            
+            # Draw a paused screen so the UI doesn't break
+            offline_frame = np.zeros((360, 640, 3), dtype=np.uint8)
+            text = "SYSTEM PAUSED"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text_size = cv2.getTextSize(text, font, 1, 1)[0]
+            cv2.putText(offline_frame, text, ((640 - text_size[0]) // 2, (360 + text_size[1]) // 2), font, 1, (100, 100, 100), 2)
+            ret, buffer = cv2.imencode('.jpg', offline_frame)
+            if ret: global_frame_buffer[camera_id] = buffer.tobytes()
+            
+            time.sleep(1) # Sleep peacefully without hurting the router
+            continue
+
+        # 2. IF ACTIVE, CONNECT TO THE CAMERA
+        if cap is None:
+            cap = cv2.VideoCapture(source if source != '0' else 0)
+            
         success, frame = cap.read()
         
-        # --- NEW: THE "OFFLINE" CATCHER ---
+        # --- THE "OFFLINE" CATCHER ---
         if not success:
-            # 1. Create a pure black image (Height: 360, Width: 640, 3 Color Channels)
             offline_frame = np.zeros((360, 640, 3), dtype=np.uint8)
-            
-            # 2. Add Red "CAMERA OFFLINE" text to the center
             text = "CAMERA OFFLINE"
             font = cv2.FONT_HERSHEY_SIMPLEX
             text_size = cv2.getTextSize(text, font, 1, 1)[0]
-            text_x = (640 - text_size[0]) // 2
-            text_y = (360 + text_size[1]) // 2
-            cv2.putText(offline_frame, text, (text_x, text_y), font, 1, (0, 0, 255), 1)
-            
-            # 3. Save this black frame to the Web Buffer so the UI sees it instantly!
+            cv2.putText(offline_frame, text, ((640 - text_size[0]) // 2, (360 + text_size[1]) // 2), font, 1, (0, 0, 255), 1)
             ret, buffer = cv2.imencode('.jpg', offline_frame)
-            if ret:
-                global_frame_buffer[camera_id] = buffer.tobytes()
-            
-            # 4. Wait 2 seconds, then try to reconnect to the broken camera
+            if ret: global_frame_buffer[camera_id] = buffer.tobytes()
             time.sleep(5)
             cap.open(source if source != '0' else 0)
             continue
-        # ----------------------------------
         
         frame_counter += 1
         
+        # 3. RUN YOLO AI
         if frame_counter % 5 == 0:
             frame = cv2.resize(frame, (640, 360)) 
-            
             with model_lock:
                 results = model(frame, conf=0.4, imgsz=640, verbose=False)
             
@@ -137,20 +150,14 @@ def camera_worker(camera_id, source):
 
             if camera_id in active_cameras:
                 active_cameras[camera_id]['count'] = person_count
+                active_cameras[camera_id]['last_updated'] = time.time()
             
-            # Draw Count on Video
-            text = f"Count: {person_count}"
-            cv2.rectangle(annotated_frame, (10, 10), (200, 50), (0, 0, 0), -1)
-            cv2.putText(annotated_frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-            # Save latest frame
             ret, buffer = cv2.imencode('.jpg', annotated_frame)
-            if ret:
-                global_frame_buffer[camera_id] = buffer.tobytes()
+            if ret: global_frame_buffer[camera_id] = buffer.tobytes()
         
         time.sleep(0.01) 
         
-    cap.release()
+    if cap is not None: cap.release()
 
 def start_camera_thread(camera_id, url):
     if camera_id not in camera_threads:
@@ -172,9 +179,13 @@ def load_cameras_from_db():
         c.execute("SELECT id, name, url, camera_group FROM cameras")
         rows = c.fetchall()
         for row in rows:
-            cam_id, name, url, group = row
-            active_cameras[cam_id] = {"name": name, "url": url, "group": group, "count": 0}
+            # THIS IS THE MISSING LINE: Unpack the variables from the database!
+            cam_id, name, url, group = row 
+            
+            # Now Python knows what 'name' is and can save it:
+            active_cameras[cam_id] = {"name": name, "url": url, "group": group, "count": 0, "is_active": False, "last_updated": time.time()}
             start_camera_thread(cam_id, url)
+            
         print(f"Loaded {len(rows)} cameras.")
 
 init_db()
@@ -210,7 +221,9 @@ def add_camera():
                   (new_id, camera_name, camera_url, camera_group))
         conn.commit()
 
-    active_cameras[new_id] = { "name": camera_name, "url": camera_url, "group": camera_group, "count": 0 }
+    # ---> ADDED "is_active": False RIGHT HERE <---
+    active_cameras[new_id] = { "name": camera_name, "url": camera_url, "group": camera_group, "count": 0, "is_active": False }
+    
     start_camera_thread(new_id, camera_url) 
     
     return redirect(url_for('index'))
@@ -229,8 +242,34 @@ def remove_camera(camera_id):
 
 @app.route('/api/stats')
 def get_stats():
-    data = { cid: {"name": i['name'], "count": i['count'], "group": i['group']} for cid, i in active_cameras.items() }
+    data = { cid: {
+        "name": i['name'], 
+        "count": i['count'], 
+        "group": i['group'], 
+        "is_active": i.get('is_active', False),
+        "last_updated": i.get('last_updated', time.time()) # NEW: Send time to the browser
+    } for cid, i in active_cameras.items() }
     return jsonify(data)
+
+@app.route('/api/toggle_group/<group_name>', methods=['POST'])
+def toggle_group(group_name):
+    data = request.json
+    action = data.get('action') # Will be 'start' or 'stop'
+    
+    # Loop through all cameras and flip the switch if they belong to this building
+    for cam_id, info in active_cameras.items():
+        if info['group'] == group_name:
+            info['is_active'] = (action == 'start')
+            
+    return jsonify({"status": "success", "zone": group_name, "action": action})
+
+@app.route('/api/toggle/<camera_id>', methods=['POST'])
+def toggle_camera(camera_id):
+    if camera_id in active_cameras:
+        current_state = active_cameras[camera_id].get('is_active', False)
+        active_cameras[camera_id]['is_active'] = not current_state # Flip the switch
+        return jsonify({"status": "success", "is_active": active_cameras[camera_id]['is_active']})
+    return jsonify({"status": "error"})
 
 @app.route('/api/history')
 def get_history():

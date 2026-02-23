@@ -165,7 +165,13 @@
                                 <span onclick="window.location.href='/remove_camera/{{ cam_id }}'" style="color:#cf6679; margin-left:10px; cursor: pointer;" title="Remove Camera">
                                     <i class="fas fa-trash"></i>
                                 </span>
+                                <span id="timer-live-{{ cam_id }}" style="color: #cf6679; font-size: 0.85rem; margin-left: 10px; display: none; font-weight: bold;"></span>
+                                <button id="btn-{{ cam_id }}" onclick="toggleAI('{{ cam_id }}')" style="background: #333; color: #03dac6; border: 1px solid #03dac6; padding: 2px 8px; border-radius: 4px; cursor: pointer; margin-left: 10px; font-weight: bold;">
+                                    Start Feed
+                                </button>
+                                <span onclick="window.location.href='/remove_camera/{{ cam_id }}'" style="color:#cf6679; margin-left:10px; cursor: pointer;" title="Remove Camera">
                             </div>
+                            
                         </div>
                         
                         {% if loop.index > 6 %}
@@ -183,19 +189,28 @@
     </div>
 
     <script>
-        // --- 0. FULL SCREEN MODAL LOGIC ---
-        function openModal(imgElement, camName) {
+// --- 0. FULL SCREEN MODAL LOGIC ---
+        let activeModalCamId = null; // Fixes the ReferenceError crash!
+
+        function openModal(imgElement, camName, camId) {
             if (!imgElement.src || imgElement.src.endsWith(window.location.host + '/')) return;
-            const modal = document.getElementById("videoModal");
-            const modalImg = document.getElementById("modalImg");
-            const modalTitle = document.getElementById("modalTitle");
             
-            modalImg.src = imgElement.src;
-            modalTitle.innerText = camName + " (Live)";
+            activeModalCamId = camId; 
+            const modal = document.getElementById("videoModal");
+            
+            document.getElementById("modalImg").src = imgElement.src;
+            document.getElementById("modalTitle").innerText = camName + " (Live)";
+            
+            const currentBadge = document.getElementById(`count-live-${camId}`);
+            if(currentBadge) {
+                document.getElementById("modalCount").innerText = currentBadge.innerText;
+            }
+
             modal.classList.add("show");
         }
 
         function closeModal() {
+            activeModalCamId = null; 
             document.getElementById("videoModal").classList.remove("show");
         }
 
@@ -210,7 +225,7 @@
         // --- 2. ENTER A SPECIFIC ZONE (WITH PAGINATION) ---
         let currentPage = 1;
         const camerasPerPage = 6;
-        let currentZoneCards = []; // Memory of cameras in the current building
+        let currentZoneCards = [];
 
         function viewZone(zoneName) {
             switchView('live'); 
@@ -218,14 +233,11 @@
             document.getElementById('nav-zones').classList.add('active'); 
 
             const allCards = document.querySelectorAll('.cam-card');
-            currentZoneCards = []; // Reset the memory
+            currentZoneCards = []; 
 
-            // 1. Instantly hide ALL cameras and kill ALL streams to save bandwidth
             allCards.forEach(card => {
                 card.style.display = 'none';
                 card.querySelector('.cam-feed').src = ""; 
-                
-                // 2. If it belongs to this building, add it to our pagination list
                 if (card.getAttribute('data-group') === zoneName) {
                     currentZoneCards.push(card);
                 }
@@ -233,7 +245,6 @@
 
             document.getElementById('empty-message').style.display = currentZoneCards.length === 0 ? 'block' : 'none';
             
-            // 3. Render the first page
             if (currentZoneCards.length > 0) {
                 currentPage = 1; 
                 renderPage();
@@ -242,7 +253,6 @@
             }
         }
 
-        // --- NEW: RENDER THE CURRENT PAGE ---
         function renderPage() {
             const totalPages = Math.ceil(currentZoneCards.length / camerasPerPage);
             const startIndex = (currentPage - 1) * camerasPerPage;
@@ -257,28 +267,23 @@
                     if (img.src !== videoSource) { img.src = videoSource; } 
                 } else {
                     card.style.display = 'none';
-                    img.src = ""; // Disconnect the stream to save laptop CPU
+                    img.src = ""; 
                 }
             });
 
-            // Update the UI Buttons dynamically
             if (totalPages > 1) {
                 document.getElementById('pagination-controls').style.display = 'flex';
-                
-                // 1. Generate the [1] [2] [3] Number Buttons
                 const pageNumbersDiv = document.getElementById('page-numbers');
-                pageNumbersDiv.innerHTML = ''; // Clear old numbers
+                pageNumbersDiv.innerHTML = ''; 
                 
                 for (let i = 1; i <= totalPages; i++) {
                     const btn = document.createElement('button');
-                    // Add the 'active' purple highlight if it is the current page
                     btn.className = 'page-btn ' + (i === currentPage ? 'active' : '');
                     btn.innerText = i;
-                    btn.onclick = () => goToPage(i); // Make the number clickable!
+                    btn.onclick = () => goToPage(i); 
                     pageNumbersDiv.appendChild(btn);
                 }
 
-                // 2. Disable/Enable the Arrow Buttons
                 document.getElementById('btn-prev').disabled = (currentPage === 1);
                 document.getElementById('btn-next').disabled = (currentPage === totalPages);
             } else {
@@ -286,7 +291,6 @@
             }
         }
 
-        // --- NEW: CHANGE PAGE LOGIC ---
         function changePage(direction) {
             currentPage += direction;
             renderPage();
@@ -317,40 +321,154 @@
             item.querySelector('.dropdown-content').classList.toggle('show');
         }
 
-        // --- 4. BACKGROUND ANALYTICS POLLING ---
-        setInterval(async () => {
+        // --- NEW: TOGGLE AI ON/OFF FOR SINGLE CAMERA ---
+        async function toggleAI(camId) {
+            const btn = document.getElementById(`btn-${camId}`);
+            btn.innerText = "Loading..."; 
+            
+            try {
+                const res = await fetch(`/api/toggle/${camId}`, { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.is_active) {
+                    btn.innerText = "Stop Feed";
+                    btn.style.background = "#cf6679";
+                    btn.style.color = "black";
+                    btn.style.borderColor = "#cf6679";
+                } else {
+                    btn.innerText = "Start Feed";
+                    btn.style.background = "#333";
+                    btn.style.color = "#03dac6";
+                    btn.style.borderColor = "#03dac6";
+                }
+            } catch (error) {
+                console.error("Toggle failed", error);
+                btn.innerText = "Error";
+            }
+        }
+
+        // --- NEW: TOGGLE ENTIRE ZONE FROM DASHBOARD ---
+        async function toggleGroup(groupName, action) {
+            try {
+                await fetch(`/api/toggle_group/${encodeURIComponent(groupName)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+            } catch (error) { console.error("Group toggle failed", error); }
+        }
+
+// --- 4. BACKGROUND ANALYTICS POLLING ---
+setInterval(async () => {
             try {
                 const response = await fetch('/api/stats');
                 const data = await response.json();
+                
                 const groups = {};
-                let totalPeople = 0;
+                const groupActive = {}; 
+                
+                // NEW: Split the total tracking
+                let activePeople = 0;      // People on currently running cameras
+                let totalKnownPeople = 0;  // People across all cameras (historical + live)
+                let allCamerasActive = true; // Flag to check if we are 100% live
+                
+                const now = Math.floor(Date.now() / 1000); 
 
                 for (const [camId, info] of Object.entries(data)) {
                     const badge = document.getElementById(`count-live-${camId}`);
+                    const timerSpan = document.getElementById(`timer-live-${camId}`);
+                    
                     if (badge) badge.innerText = `People: ${info.count}`;
                     
-                    if (!groups[info.group]) groups[info.group] = 0;
-                    groups[info.group] += info.count;
-                    totalPeople += info.count;
+                    if (timerSpan) {
+                        if (!info.is_active) {
+                            let diff = now - Math.floor(info.last_updated);
+                            let timeText = diff < 60 ? `${diff}s ago` : `${Math.floor(diff/60)}m ${diff%60}s ago`;
+                            timerSpan.innerText = `(Paused ${timeText})`;
+                            timerSpan.style.display = 'inline';
+                            allCamerasActive = false; // We found a paused camera!
+                        } else {
+                            timerSpan.style.display = 'none'; 
+                        }
+                    }
+                    
+                    if (typeof activeModalCamId !== 'undefined' && activeModalCamId === camId) {
+                        const modalCount = document.getElementById('modalCount');
+                        if (modalCount) modalCount.innerText = `People: ${info.count}`;
+                    }
+                    
+                    if (!groups[info.group]) groups[info.group] = { count: 0, last_updated: info.last_updated };
+                    groups[info.group].count += info.count;
+                    
+                    if (info.last_updated > groups[info.group].last_updated) {
+                        groups[info.group].last_updated = info.last_updated;
+                    }
+                    
+                    // NEW: Calculate the split totals
+                    totalKnownPeople += info.count;
+                    if (info.is_active) {
+                        activePeople += info.count;
+                    }
+                    
+                    if (!groupActive[info.group]) groupActive[info.group] = false;
+                    if (info.is_active) groupActive[info.group] = true; 
                 }
 
                 if (document.getElementById('dashboard-view').classList.contains('active')) {
-                    let html = `<div class="stat-card" style="border-color: #03dac6;">
-                                    <h3>TOTAL CAMPUS COUNT</h3>
-                                    <p class="stat-value" style="color: #03dac6;">${totalPeople}</p>
-                                    <p class="stat-sub">Across all connected cameras</p>
+                    
+                    // NEW: Dynamic Total Card Styling
+                    let totalCardBorder = allCamerasActive ? "#03dac6" : "#ffb86c"; // Green if 100% live, Orange if mixed
+                    let activeSubtext = allCamerasActive ? "System is 100% Live" : "Contains paused historical data";
+                    let icon = allCamerasActive ? "fa-check-circle" : "fa-exclamation-triangle";
+
+                    let html = `<div class="stat-card" style="border-color: ${totalCardBorder};">
+                                    <h3 style="color: ${totalCardBorder};">CAMPUS OVERVIEW</h3>
+                                    
+                                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px;">
+                                        <div>
+                                            <p class="stat-value" style="color: ${totalCardBorder}; margin-bottom: 0;">${totalKnownPeople}</p>
+                                            <p class="stat-sub" style="margin-top: 0;">Last Known Total</p>
+                                        </div>
+                                        <div style="text-align: right; border-left: 1px solid #444; padding-left: 15px;">
+                                            <p class="stat-value" style="font-size: 1.8rem; color: #fff; margin-bottom: 0;">${activePeople}</p>
+                                            <p class="stat-sub" style="margin-top: 0;">Live Now</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <p style="color: ${totalCardBorder}; font-size: 0.85rem; margin-top: 15px; font-weight: bold;">
+                                        <i class="fas ${icon}"></i> ${activeSubtext}
+                                    </p>
                                 </div>`;
                     
-                    for (const [groupName, count] of Object.entries(groups)) {
+                    for (const [groupName, groupData] of Object.entries(groups)) {
+                        let isActive = groupActive[groupName];
+                        let btnText = isActive ? "Stop Zone Feed" : "Start Zone Feed";
+                        let btnColor = isActive ? "#cf6679" : "#03dac6"; 
+                        let action = isActive ? "stop" : "start";
+                        
+                        let timerHtml = "";
+                        if (!isActive) {
+                            let diff = now - Math.floor(groupData.last_updated);
+                            let timeText = diff < 60 ? `${diff}s ago` : `${Math.floor(diff/60)}m ${diff%60}s ago`;
+                            timerHtml = `<p style="color: #cf6679; font-size: 0.85rem; margin-top: 0; font-weight: bold;">Last known: ${timeText}</p>`;
+                        } else {
+                            timerHtml = `<p style="color: #03dac6; font-size: 0.85rem; margin-top: 0; font-weight: bold;">Live</p>`;
+                        }
+
                         html += `<div class="stat-card">
                                     <h3>${groupName}</h3>
-                                    <p class="stat-value">${count}</p>
-                                    <p class="stat-sub">Active detections</p>
+                                    <p class="stat-value" style="margin-bottom: 5px;">${groupData.count}</p>
+                                    ${timerHtml}
+                                    <button onclick="toggleGroup('${groupName}', '${action}')" style="margin-top: 15px; background: #222; color: ${btnColor}; border: 1px solid ${btnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
+                                        <i class="fas ${isActive ? 'fa-pause' : 'fa-play'}"></i> ${btnText}
+                                    </button>
                                  </div>`;
                     }
                     document.getElementById('dashboard-stats').innerHTML = html;
                 }
-            } catch (e) { console.log("API Error", e); }
+            } catch (e) { 
+                console.error("API Error in Polling Loop:", e); 
+            }
         }, 1000);
 
         // --- 5. CHART.JS HISTORICAL DATA LOGIC ---
@@ -500,6 +618,42 @@
         }
 
         window.onload = () => { switchView('dashboard'); };
+    // --- NEW: TOGGLE AI ON/OFF ---
+        async function toggleAI(camId) {
+            const btn = document.getElementById(`btn-${camId}`);
+            btn.innerText = "Loading..."; // Feedback while we ping the router
+            
+            try {
+                const res = await fetch(`/api/toggle/${camId}`, { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.is_active) {
+                    btn.innerText = "Stop Feed";
+                    btn.style.background = "#cf6679";
+                    btn.style.color = "black";
+                    btn.style.borderColor = "#cf6679";
+                } else {
+                    btn.innerText = "Start Feed";
+                    btn.style.background = "#333";
+                    btn.style.color = "#03dac6";
+                    btn.style.borderColor = "#03dac6";
+                }
+            } catch (error) {
+                console.error("Toggle failed", error);
+                btn.innerText = "Error";
+            }
+        }
+    // --- NEW: TOGGLE ENTIRE ZONE FROM DASHBOARD ---
+        async function toggleGroup(groupName, action) {
+            try {
+                await fetch(`/api/toggle_group/${encodeURIComponent(groupName)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+                // The dashboard will automatically update the button color on the next 1-second tick!
+            } catch (error) { console.error("Group toggle failed", error); }
+        }
     </script>
 </body>
 </html>
