@@ -318,48 +318,59 @@ def get_history():
 # ==========================================
 # --- DORMANT UNITY 3D INTEGRATION API ---
 # ==========================================
+# ==========================================
+# --- DORMANT UNITY 3D INTEGRATION API ---
+# ==========================================
+# ==========================================
+# --- DORMANT UNITY 3D INTEGRATION API ---
+# ==========================================
 @app.route('/api/unity')
 def get_unity_data():
-    now = time.time()
     unity_payload = {
-        "campus": { "total_known_people": 0, "active_live_people": 0, "is_fully_live": True },
-        "zones": {},
-        "cameras": {}
+        "campus": {
+            "active_live_people": 0,
+            "total_known_people": 0
+        },
+        "zones_list": [],
+        "cameras": [] # NEW: Flat array at the root level
     }
+    
+    zones_temp = {}
     
     for cam_id, info in active_cameras.items():
         count = info['count']
         group = info['group']
         is_active = info.get('is_active', False)
-        last_updated = info.get('last_updated', now)
         
-        # 1. Package Cameras
-        unity_payload["cameras"][cam_id] = {
-            "name": info['name'],
-            "zone": group,
-            "count": count,
-            "is_active": is_active,
-            "seconds_since_update": round(now - last_updated, 1)
-        }
-        
-        # 2. Package Zones
-        if group not in unity_payload["zones"]:
-            unity_payload["zones"][group] = { "total_count": 0, "is_active": False, "seconds_since_update": 0 }
-        
-        unity_payload["zones"][group]["total_count"] += count
-        if is_active:
-            unity_payload["zones"][group]["is_active"] = True
-            unity_payload["zones"][group]["seconds_since_update"] = 0
-        elif (now - last_updated) < unity_payload["zones"][group].get("seconds_since_update", 999999):
-            unity_payload["zones"][group]["seconds_since_update"] = round(now - last_updated, 1)
-            
-        # 3. Package Campus Totals
+        # 1. Aggregate Campus Totals
         unity_payload["campus"]["total_known_people"] += count
         if is_active:
             unity_payload["campus"]["active_live_people"] += count
-        else:
-            unity_payload["campus"]["is_fully_live"] = False
             
+        # 2. Setup the Zone Dictionary
+        if group not in zones_temp:
+            zones_temp[group] = {
+                "name": group,
+                "total_count": 0,
+                "is_active": False
+            }
+            
+        zones_temp[group]["total_count"] += count
+        if is_active:
+            zones_temp[group]["is_active"] = True
+            
+        # 3. Add the camera directly to the root cameras list
+        unity_payload["cameras"].append({
+            "id": cam_id,
+            "name": info['name'],
+            "zone": group,     # Tell Unity which building this belongs to!
+            "count": count,
+            "is_active": is_active
+        })
+            
+    # Convert the temporary dictionary into the clean List format
+    unity_payload["zones_list"] = list(zones_temp.values())
+        
     return jsonify(unity_payload)
 
 if __name__ == "__main__":
