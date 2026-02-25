@@ -312,7 +312,7 @@ def get_history():
 
     return jsonify({
         "labels": labels,
-        "campus": campus_counts,
+        "campus_overview": campus_counts,
         "zones": zones
     })
 # ==========================================
@@ -327,7 +327,7 @@ def get_history():
 @app.route('/api/unity')
 def get_unity_data():
     unity_payload = {
-        "campus": {
+        "campus_overview": {
             "active_live_people": 0,
             "total_known_people": 0
         },
@@ -343,9 +343,9 @@ def get_unity_data():
         is_active = info.get('is_active', False)
         
         # 1. Aggregate Campus Totals
-        unity_payload["campus"]["total_known_people"] += count
+        unity_payload["campus_overview"]["total_known_people"] += count
         if is_active:
-            unity_payload["campus"]["active_live_people"] += count
+            unity_payload["campus_overview"]["active_live_people"] += count
             
         # 2. Setup the Zone Dictionary
         if group not in zones_temp:
