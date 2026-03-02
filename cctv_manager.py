@@ -45,6 +45,18 @@ def init_db():
                       total_count INTEGER, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
         conn.commit()
 
+# --- 1. HELPER FUNCTION TO LOAD COORDINATES ---
+def load_poly_from_txt(filename):
+    pts = []
+    if not os.path.exists(filename):
+        return None # Return None silently so it doesn't spam the console if a camera has no curtain
+    with open(filename, 'r') as f:
+        for line in f:
+            if line.strip():
+                x, y = line.strip().split(',')
+                pts.append([int(x), int(y)])
+    return np.array(pts, np.float32)
+
 # --- THE MASTER ANALYTICS LOGGER ---
 # This runs once every 5 seconds to calculate and save all totals safely.
 def analytics_logger():
@@ -93,19 +105,34 @@ threading.Thread(target=analytics_logger, daemon=True).start()
 
 # --- THE BACKGROUND AI WORKER ---
 
+# --- THE ON-DEMAND AI WORKER ---
 def camera_worker(camera_id, source):
     cap = None
     frame_counter = 0
+    
+    # --- CURTAIN INITIALIZATION ---
+    # Look for a text file named exactly like the camera's ID (e.g., cam_1710000_coords.txt)
+    poly_filename = os.path.join("coordinates", f"{camera_id}_coords.txt")
+    raw_clicked_poly = load_poly_from_txt(poly_filename)
+    
+    CLICKED_RES_W = 1920
+    CLICKED_RES_H = 1080
+    scaled_poly = None
+    
+    # If the file exists, scale the polygon to fit our 640x360 web stream!
+    if raw_clicked_poly is not None:
+        scale_w = 640 / CLICKED_RES_W
+        scale_h = 360 / CLICKED_RES_H
+        scaled_poly = (raw_clicked_poly * [scale_w, scale_h]).astype(np.int32)
     
     while thread_run_flags.get(camera_id, False):
         
         # 1. THE MANUAL TOGGLE CHECK
         if not active_cameras.get(camera_id, {}).get('is_active', False):
             if cap is not None:
-                cap.release() # Drop the network connection!
+                cap.release()
                 cap = None
             
-            # Draw a paused screen so the UI doesn't break
             offline_frame = np.zeros((360, 640, 3), dtype=np.uint8)
             text = "SYSTEM PAUSED"
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -114,7 +141,7 @@ def camera_worker(camera_id, source):
             ret, buffer = cv2.imencode('.jpg', offline_frame)
             if ret: global_frame_buffer[camera_id] = buffer.tobytes()
             
-            time.sleep(1) # Sleep peacefully without hurting the router
+            time.sleep(1)
             continue
 
         # 2. IF ACTIVE, CONNECT TO THE CAMERA
@@ -138,18 +165,41 @@ def camera_worker(camera_id, source):
         
         frame_counter += 1
         
-        # 3. RUN YOLO AI
+        # 3. RUN YOLO AI WITH CURTAIN LOGIC
         if frame_counter % 5 == 0:
             frame = cv2.resize(frame, (640, 360)) 
             with model_lock:
                 results = model(frame, conf=0.4, imgsz=640, verbose=False)
             
-            annotated_frame = results[0].plot(labels=False)
-            person_count = len(results[0].boxes)
+            annotated_frame = frame.copy()
+            person_count = 0
 
+            # Iterate through the detected boxes
+            for box in results[0].boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                foot_x = int((x1 + x2) / 2)
+                foot_y = int(y2)
+
+                # If this camera has a curtain, check if the foot is inside!
+                if scaled_poly is not None:
+                    is_inside = cv2.pointPolygonTest(scaled_poly, (foot_x, foot_y), False)
+                    if is_inside >= 0:
+                        person_count += 1
+                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.circle(annotated_frame, (foot_x, foot_y), 5, (0, 0, 255), -1)
+                else:
+                    # Fallback: If no curtain file exists, count everyone normally
+                    person_count += 1
+                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Draw the yellow curtain polygon on the web feed so you can see it!
+            if scaled_poly is not None:
+                cv2.polylines(annotated_frame, [scaled_poly], isClosed=True, color=(0, 255, 255), thickness=2)
+
+            # Update the central data dictionary for the Web and Unity APIs
             if camera_id in active_cameras:
                 active_cameras[camera_id]['count'] = person_count
-                active_cameras[camera_id]['last_updated'] = time.time()
+                active_cameras[camera_id]['last_updated'] = time.time() 
             
             ret, buffer = cv2.imencode('.jpg', annotated_frame)
             if ret: global_frame_buffer[camera_id] = buffer.tobytes()
