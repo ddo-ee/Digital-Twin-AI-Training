@@ -169,7 +169,7 @@ def camera_worker(camera_id, source):
         if frame_counter % 5 == 0:
             frame = cv2.resize(frame, (640, 360)) 
             with model_lock:
-                results = model(frame, conf=0.4, imgsz=640, verbose=False)
+                results = model(frame, conf=0.65, imgsz=640, verbose=False)
             
             annotated_frame = frame.copy()
             person_count = 0
