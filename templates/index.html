@@ -6,6 +6,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+
 </head>
 <body>
 
@@ -53,7 +55,6 @@
                             <option value="Gymnasium">Gymnasium</option>
                             <option value="Pathways">Pathways</option>
                             <option value="Parking">Parking</option>
-
                         </select>
                         <button type="submit" class="action-btn">Add Stream</button>
                     </form>
@@ -63,14 +64,30 @@
     </div>
 
     <div class="main-area">
+        <!-- ── TOP STRIP with bell button on the right ── -->
         <div class="top-strip">
-            <button onclick="document.getElementById('sidebar').classList.toggle('collapsed')" style="background:none; border:none; color:white; font-size:1.5rem; cursor:pointer; margin-right:15px;"><i class="fas fa-bars"></i></button>
+            <button onclick="document.getElementById('sidebar').classList.toggle('collapsed')" style="background:none; border:none; color:white; font-size:1.5rem; cursor:pointer; margin-right:15px;">
+                <i class="fas fa-bars"></i>
+            </button>
             <h2 class="view-title" id="page-title">Campus Dashboard</h2>
+
+            <!-- Bell notification button — right side of top strip -->
+            <div id="notif-bell-btn" onclick="openNotifPanel()" title="Anomaly Notifications">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none"
+                     viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+                     style="color:#f1f5f9">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                          d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11
+                             a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436
+                             L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                <span id="notif-badge"></span>
+            </div>
         </div>
 
         <div class="content-container">
             
-        <div id="dashboard-view" class="view-section active">
+            <div id="dashboard-view" class="view-section active">
                 
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0; margin-bottom: 20px;">
                     <h3 style="margin: 0;">Campus Analytics</h3>
@@ -86,16 +103,13 @@
                 </div>
 
                 <div id="dashboard-charts" style="display: none;">
-                    
                     <div class="chart-wrapper">
                         <h3 style="color: #03dac6; margin-top: 0;">Overall Campus Traffic</h3>
                         <canvas id="campusChart" height="80"></canvas>
                     </div>
 
                     <h3 style="color: #fff; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;">Building Breakdown</h3>
-                    <div class="dashboard-grid" id="zone-charts-container">
-                        </div>
-
+                    <div class="dashboard-grid" id="zone-charts-container"></div>
                 </div>
             </div>
 
@@ -143,10 +157,7 @@
 
                     <div id="pagination-controls" style="display: none; gap: 8px; align-items: center;">
                         <button class="page-btn" id="btn-prev" onclick="changePage(-1)"><i class="fas fa-chevron-left"></i></button>
-                        
-                        <div id="page-numbers" style="display: flex; gap: 5px;">
-                            </div>
-                        
+                        <div id="page-numbers" style="display: flex; gap: 5px;"></div>
                         <button class="page-btn" id="btn-next" onclick="changePage(1)"><i class="fas fa-chevron-right"></i></button>
                     </div>
                 </div>
@@ -169,9 +180,7 @@
                                 <button id="btn-{{ cam_id }}" onclick="toggleAI('{{ cam_id }}')" style="background: #333; color: #03dac6; border: 1px solid #03dac6; padding: 2px 8px; border-radius: 4px; cursor: pointer; margin-left: 10px; font-weight: bold;">
                                     Start Feed
                                 </button>
-                                <span onclick="window.location.href='/remove_camera/{{ cam_id }}'" style="color:#cf6679; margin-left:10px; cursor: pointer;" title="Remove Camera">
                             </div>
-                            
                         </div>
                         
                         {% if loop.index > 6 %}
@@ -188,29 +197,45 @@
         </div>
     </div>
 
+    <!-- Slide-in notification panel + overlay -->
+    <div id="notif-overlay" onclick="closeNotifPanel()"></div>
+
+    <div id="notif-panel">
+        <div id="notif-panel-header">
+            <h2>🚨 Anomaly Alerts</h2>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <button id="notif-dismiss-all-btn" onclick="dismissAllAlerts()">Dismiss All</button>
+                <button id="notif-close-btn" onclick="closeNotifPanel()">✕</button>
+            </div>
+        </div>
+        <div id="notif-list">
+            <p id="notif-empty">No active alerts.</p>
+        </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container"></div>
+
+
     <script>
-// --- 0. FULL SCREEN MODAL LOGIC ---
-        let activeModalCamId = null; // Fixes the ReferenceError crash!
+        // --- 0. FULL SCREEN MODAL LOGIC ---
+        let activeModalCamId = null;
 
         function openModal(imgElement, camName, camId) {
             if (!imgElement.src || imgElement.src.endsWith(window.location.host + '/')) return;
-            
-            activeModalCamId = camId; 
+            activeModalCamId = camId;
             const modal = document.getElementById("videoModal");
-            
             document.getElementById("modalImg").src = imgElement.src;
             document.getElementById("modalTitle").innerText = camName + " (Live)";
-            
             const currentBadge = document.getElementById(`count-live-${camId}`);
-            if(currentBadge) {
+            if (currentBadge) {
                 document.getElementById("modalCount").innerText = currentBadge.innerText;
             }
-
             modal.classList.add("show");
         }
 
         function closeModal() {
-            activeModalCamId = null; 
+            activeModalCamId = null;
             document.getElementById("videoModal").classList.remove("show");
         }
 
@@ -228,25 +253,25 @@
         let currentZoneCards = [];
 
         function viewZone(zoneName) {
-            switchView('live'); 
+            switchView('live');
             document.getElementById('page-title').innerText = "Live Viewer: " + zoneName;
-            document.getElementById('nav-zones').classList.add('active'); 
+            document.getElementById('nav-zones').classList.add('active');
 
             const allCards = document.querySelectorAll('.cam-card');
-            currentZoneCards = []; 
+            currentZoneCards = [];
 
             allCards.forEach(card => {
                 card.style.display = 'none';
-                card.querySelector('.cam-feed').src = ""; 
+                card.querySelector('.cam-feed').src = "";
                 if (card.getAttribute('data-group') === zoneName) {
                     currentZoneCards.push(card);
                 }
             });
 
             document.getElementById('empty-message').style.display = currentZoneCards.length === 0 ? 'block' : 'none';
-            
+
             if (currentZoneCards.length > 0) {
-                currentPage = 1; 
+                currentPage = 1;
                 renderPage();
             } else {
                 document.getElementById('pagination-controls').style.display = 'none';
@@ -256,34 +281,31 @@
         function renderPage() {
             const totalPages = Math.ceil(currentZoneCards.length / camerasPerPage);
             const startIndex = (currentPage - 1) * camerasPerPage;
-            const endIndex = startIndex + camerasPerPage;
+            const endIndex   = startIndex + camerasPerPage;
 
             currentZoneCards.forEach((card, index) => {
-                const img = card.querySelector('.cam-feed');
+                const img         = card.querySelector('.cam-feed');
                 const videoSource = img.getAttribute('data-src');
-
                 if (index >= startIndex && index < endIndex) {
                     card.style.display = 'block';
-                    if (img.src !== videoSource) { img.src = videoSource; } 
+                    if (img.src !== videoSource) { img.src = videoSource; }
                 } else {
                     card.style.display = 'none';
-                    img.src = ""; 
+                    img.src = "";
                 }
             });
 
             if (totalPages > 1) {
                 document.getElementById('pagination-controls').style.display = 'flex';
                 const pageNumbersDiv = document.getElementById('page-numbers');
-                pageNumbersDiv.innerHTML = ''; 
-                
+                pageNumbersDiv.innerHTML = '';
                 for (let i = 1; i <= totalPages; i++) {
                     const btn = document.createElement('button');
                     btn.className = 'page-btn ' + (i === currentPage ? 'active' : '');
                     btn.innerText = i;
-                    btn.onclick = () => goToPage(i); 
+                    btn.onclick = () => goToPage(i);
                     pageNumbersDiv.appendChild(btn);
                 }
-
                 document.getElementById('btn-prev').disabled = (currentPage === 1);
                 document.getElementById('btn-next').disabled = (currentPage === totalPages);
             } else {
@@ -291,23 +313,14 @@
             }
         }
 
-        function changePage(direction) {
-            currentPage += direction;
-            renderPage();
-        }
-
-        function goToPage(pageNum) {
-            currentPage = pageNum;
-            renderPage();
-        }
+        function changePage(direction) { currentPage += direction; renderPage(); }
+        function goToPage(pageNum)     { currentPage = pageNum;    renderPage(); }
 
         // --- 3. VIEW SWITCHING LOGIC ---
         function switchView(viewName) {
             document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.menu-link').forEach(el => el.classList.remove('active'));
-            
             document.getElementById(viewName + '-view').classList.add('active');
-            
             if (viewName === 'dashboard') {
                 document.getElementById('page-title').innerText = "Campus Dashboard";
                 document.getElementById('nav-dashboard').classList.add('active');
@@ -321,25 +334,23 @@
             item.querySelector('.dropdown-content').classList.toggle('show');
         }
 
-        // --- NEW: TOGGLE AI ON/OFF FOR SINGLE CAMERA ---
+        // --- 4. TOGGLE AI ON/OFF FOR SINGLE CAMERA ---
         async function toggleAI(camId) {
             const btn = document.getElementById(`btn-${camId}`);
-            btn.innerText = "Loading..."; 
-            
+            btn.innerText = "Loading...";
             try {
-                const res = await fetch(`/api/toggle/${camId}`, { method: 'POST' });
+                const res  = await fetch(`/api/toggle/${camId}`, { method: 'POST' });
                 const data = await res.json();
-                
                 if (data.is_active) {
                     btn.innerText = "Stop Feed";
-                    btn.style.background = "#cf6679";
-                    btn.style.color = "black";
-                    btn.style.borderColor = "#cf6679";
+                    btn.style.background   = "#cf6679";
+                    btn.style.color        = "black";
+                    btn.style.borderColor  = "#cf6679";
                 } else {
                     btn.innerText = "Start Feed";
-                    btn.style.background = "#333";
-                    btn.style.color = "#03dac6";
-                    btn.style.borderColor = "#03dac6";
+                    btn.style.background   = "#333";
+                    btn.style.color        = "#03dac6";
+                    btn.style.borderColor  = "#03dac6";
                 }
             } catch (error) {
                 console.error("Toggle failed", error);
@@ -347,7 +358,7 @@
             }
         }
 
-        // --- NEW: TOGGLE ENTIRE ZONE FROM DASHBOARD ---
+        // --- 5. TOGGLE ENTIRE ZONE FROM DASHBOARD ---
         async function toggleGroup(groupName, action) {
             try {
                 await fetch(`/api/toggle_group/${encodeURIComponent(groupName)}`, {
@@ -358,76 +369,76 @@
             } catch (error) { console.error("Group toggle failed", error); }
         }
 
-// --- 4. BACKGROUND ANALYTICS POLLING ---
-setInterval(async () => {
+        // --- 6. MASTER TOGGLE ---
+        async function toggleAll(action) {
+            try {
+                await fetch('/api/toggle_all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+            } catch (error) { console.error("Master toggle failed", error); }
+        }
+
+        // --- 7. BACKGROUND ANALYTICS POLLING ---
+        setInterval(async () => {
             try {
                 const response = await fetch('/api/stats');
-                const data = await response.json();
-                
-                const groups = {};
-                const groupActive = {}; 
-                
-                // NEW: Split the total tracking
-                let activePeople = 0;      // People on currently running cameras
-                let totalKnownPeople = 0;  // People across all cameras (historical + live)
-                let allCamerasActive = true; // Flag to check if we are 100% live
-                
-                const now = Math.floor(Date.now() / 1000); 
+                const data     = await response.json();
+
+                const groups     = {};
+                const groupActive = {};
+                let activePeople       = 0;
+                let totalKnownPeople   = 0;
+                let allCamerasActive   = true;
+                const now = Math.floor(Date.now() / 1000);
 
                 for (const [camId, info] of Object.entries(data)) {
-                    const badge = document.getElementById(`count-live-${camId}`);
+                    const badge     = document.getElementById(`count-live-${camId}`);
                     const timerSpan = document.getElementById(`timer-live-${camId}`);
-                    
+
                     if (badge) badge.innerText = `People: ${info.count}`;
-                    
+
                     if (timerSpan) {
                         if (!info.is_active) {
-                            let diff = now - Math.floor(info.last_updated);
+                            let diff     = now - Math.floor(info.last_updated);
                             let timeText = diff < 60 ? `${diff}s ago` : `${Math.floor(diff/60)}m ${diff%60}s ago`;
-                            timerSpan.innerText = `(Paused ${timeText})`;
-                            timerSpan.style.display = 'inline';
-                            allCamerasActive = false; // We found a paused camera!
+                            timerSpan.innerText      = `(Paused ${timeText})`;
+                            timerSpan.style.display  = 'inline';
+                            allCamerasActive         = false;
                         } else {
-                            timerSpan.style.display = 'none'; 
+                            timerSpan.style.display = 'none';
                         }
                     }
-                    
+
                     if (typeof activeModalCamId !== 'undefined' && activeModalCamId === camId) {
                         const modalCount = document.getElementById('modalCount');
                         if (modalCount) modalCount.innerText = `People: ${info.count}`;
                     }
-                    
+
                     if (!groups[info.group]) groups[info.group] = { count: 0, last_updated: info.last_updated };
                     groups[info.group].count += info.count;
-                    
                     if (info.last_updated > groups[info.group].last_updated) {
                         groups[info.group].last_updated = info.last_updated;
                     }
-                    
-                    // NEW: Calculate the split totals
+
                     totalKnownPeople += info.count;
-                    if (info.is_active) {
-                        activePeople += info.count;
-                    }
-                    
+                    if (info.is_active) activePeople += info.count;
+
                     if (!groupActive[info.group]) groupActive[info.group] = false;
-                    if (info.is_active) groupActive[info.group] = true; 
+                    if (info.is_active) groupActive[info.group] = true;
                 }
 
-if (document.getElementById('dashboard-view').classList.contains('active')) {
-                    
-                    let totalCardBorder = allCamerasActive ? "#03dac6" : "#ffb86c"; 
-                    let activeSubtext = allCamerasActive ? "System is 100% Live" : "Contains paused historical data";
-                    let icon = allCamerasActive ? "fa-check-circle" : "fa-exclamation-triangle";
-                    
-                    // NEW: Master Button Logic
-                    let masterBtnText = allCamerasActive ? "Pause All Cameras" : "Start All Cameras";
-                    let masterBtnColor = allCamerasActive ? "#cf6679" : "#03dac6";
-                    let masterAction = allCamerasActive ? "stop" : "start";
+                if (document.getElementById('dashboard-view').classList.contains('active')) {
+                    let totalCardBorder = allCamerasActive ? "#03dac6" : "#ffb86c";
+                    let activeSubtext   = allCamerasActive ? "System is 100% Live" : "Contains paused historical data";
+                    let icon            = allCamerasActive ? "fa-check-circle" : "fa-exclamation-triangle";
+                    let masterBtnText   = allCamerasActive ? "Pause All Cameras" : "Start All Cameras";
+                    let masterBtnColor  = allCamerasActive ? "#cf6679" : "#03dac6";
+                    let masterAction    = allCamerasActive ? "stop" : "start";
 
                     let html = `<div class="stat-card" style="border-color: ${totalCardBorder};">
                                     <h3 style="color: ${totalCardBorder};">CAMPUS OVERVIEW</h3>
-                                    
                                     <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px;">
                                         <div>
                                             <p class="stat-value" style="color: ${totalCardBorder}; margin-bottom: 0;">${totalKnownPeople}</p>
@@ -438,31 +449,26 @@ if (document.getElementById('dashboard-view').classList.contains('active')) {
                                             <p class="stat-sub" style="margin-top: 0;">Live Now</p>
                                         </div>
                                     </div>
-                                    
                                     <p style="color: ${totalCardBorder}; font-size: 0.85rem; margin-top: 15px; font-weight: bold;">
                                         <i class="fas ${icon}"></i> ${activeSubtext}
                                     </p>
-                                    
                                     <button onclick="toggleAll('${masterAction}')" style="margin-top: 10px; background: #222; color: ${masterBtnColor}; border: 1px solid ${masterBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
                                         <i class="fas ${allCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${masterBtnText}
                                     </button>
                                 </div>`;
-                    
-                    
+
                     for (const [groupName, groupData] of Object.entries(groups)) {
-                        let isActive = groupActive[groupName];
-                        let btnText = isActive ? "Stop Zone Feed" : "Start Zone Feed";
-                        let btnColor = isActive ? "#cf6679" : "#03dac6"; 
-                        let action = isActive ? "stop" : "start";
-                        
-                        let timerHtml = "";
-                        if (!isActive) {
-                            let diff = now - Math.floor(groupData.last_updated);
-                            let timeText = diff < 60 ? `${diff}s ago` : `${Math.floor(diff/60)}m ${diff%60}s ago`;
-                            timerHtml = `<p style="color: #cf6679; font-size: 0.85rem; margin-top: 0; font-weight: bold;">Last known: ${timeText}</p>`;
-                        } else {
-                            timerHtml = `<p style="color: #03dac6; font-size: 0.85rem; margin-top: 0; font-weight: bold;">Live</p>`;
-                        }
+                        let isActive  = groupActive[groupName];
+                        let btnText   = isActive ? "Stop Zone Feed"  : "Start Zone Feed";
+                        let btnColor  = isActive ? "#cf6679"         : "#03dac6";
+                        let action    = isActive ? "stop"            : "start";
+                        let timerHtml = isActive
+                            ? `<p style="color: #03dac6; font-size: 0.85rem; margin-top: 0; font-weight: bold;">Live</p>`
+                            : (() => {
+                                let diff     = now - Math.floor(groupData.last_updated);
+                                let timeText = diff < 60 ? `${diff}s ago` : `${Math.floor(diff/60)}m ${diff%60}s ago`;
+                                return `<p style="color: #cf6679; font-size: 0.85rem; margin-top: 0; font-weight: bold;">Last known: ${timeText}</p>`;
+                              })();
 
                         html += `<div class="stat-card">
                                     <h3>${groupName}</h3>
@@ -475,18 +481,17 @@ if (document.getElementById('dashboard-view').classList.contains('active')) {
                     }
                     document.getElementById('dashboard-stats').innerHTML = html;
                 }
-            } catch (e) { 
-                console.error("API Error in Polling Loop:", e); 
+            } catch (e) {
+                console.error("API Error in Polling Loop:", e);
             }
         }, 1000);
-    
 
-        // --- 5. CHART.JS HISTORICAL DATA LOGIC ---
+        // --- 8. CHART.JS HISTORICAL DATA LOGIC ---
         let campusChartInstance = null;
-        let zoneChartInstances = {}; // Track all small charts
-        let currentChartData = null; 
-        let largeChartInstance = null; 
-        let chartUpdateTimer = null; // The 5-second loop
+        let zoneChartInstances  = {};
+        let currentChartData    = null;
+        let largeChartInstance  = null;
+        let chartUpdateTimer    = null;
 
         function switchDashTab(tab) {
             document.getElementById('tab-live').classList.remove('active');
@@ -494,64 +499,51 @@ if (document.getElementById('dashboard-view').classList.contains('active')) {
             document.getElementById('tab-' + tab).classList.add('active');
 
             if (tab === 'live') {
-                document.getElementById('dashboard-stats').style.display = 'grid';
+                document.getElementById('dashboard-stats').style.display  = 'grid';
                 document.getElementById('dashboard-charts').style.display = 'none';
-                
-                // Stop the timer when looking at Live Numbers to save CPU
-                if (chartUpdateTimer) clearInterval(chartUpdateTimer); 
-            } else {
-                document.getElementById('dashboard-stats').style.display = 'none';
-                document.getElementById('dashboard-charts').style.display = 'block';
-                
-                loadCharts(true); // Initial Draw (builds the HTML)
-                
-                // Start the 5-second auto-update loop!
                 if (chartUpdateTimer) clearInterval(chartUpdateTimer);
-                chartUpdateTimer = setInterval(() => loadCharts(false), 5000); 
+            } else {
+                document.getElementById('dashboard-stats').style.display  = 'none';
+                document.getElementById('dashboard-charts').style.display = 'block';
+                loadCharts(true);
+                if (chartUpdateTimer) clearInterval(chartUpdateTimer);
+                chartUpdateTimer = setInterval(() => loadCharts(false), 5000);
             }
         }
 
         async function loadCharts(isInitialLoad = false) {
             try {
-                const res = await fetch('/api/history');
+                const res        = await fetch('/api/history');
                 currentChartData = await res.json();
-                const data = currentChartData;
+                const data       = currentChartData;
 
-                // 1. UPDATE OR DRAW CAMPUS CHART
                 if (!campusChartInstance) {
-                    const ctxCampus = document.getElementById('campusChart').getContext('2d');
+                    const ctxCampus     = document.getElementById('campusChart').getContext('2d');
                     campusChartInstance = new Chart(ctxCampus, {
                         type: 'line',
                         data: {
                             labels: data.labels,
-                            datasets: [{
-                                label: 'Total People Detected', data: data.campus,
-                                borderColor: '#03dac6', backgroundColor: 'rgba(3, 218, 198, 0.1)',
-                                borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0
-                            }]
+                            datasets: [{ label: 'Total People Detected', data: data.campus_overview, borderColor: '#03dac6', backgroundColor: 'rgba(3, 218, 198, 0.1)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }]
                         },
                         options: { scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } }, plugins: { legend: { display: false } } }
                     });
                 } else {
-                    // Smoothly slide the new data in
-                    campusChartInstance.data.labels = data.labels;
-                    campusChartInstance.data.datasets[0].data = data.campus;
-                    campusChartInstance.update('none'); // 'none' disables the bouncing animation
+                    campusChartInstance.data.labels              = data.labels;
+                    campusChartInstance.data.datasets[0].data    = data.campus_overview;
+                    campusChartInstance.update('none');
                 }
 
-                // 2. UPDATE OR DRAW ZONE CHARTS
                 const zoneContainer = document.getElementById('zone-charts-container');
-                
+
                 if (isInitialLoad) {
-                    zoneContainer.innerHTML = ''; 
-                    zoneChartInstances = {}; 
-                    
+                    zoneContainer.innerHTML = '';
+                    zoneChartInstances      = {};
+
                     for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
-                        const wrapper = document.createElement('div');
-                        wrapper.className = 'chart-wrapper zone-chart-card'; 
-                        wrapper.onclick = () => openChartModal(zoneName);
-                        
-                        const safeId = zoneName.replace(/\s+/g, '');
+                        const wrapper  = document.createElement('div');
+                        wrapper.className = 'chart-wrapper zone-chart-card';
+                        wrapper.onclick   = () => openChartModal(zoneName);
+                        const safeId      = zoneName.replace(/\s+/g, '');
                         wrapper.innerHTML = `<h3 style="color: #bb86fc; margin-top: 0; font-size:1rem;">${zoneName}</h3><canvas id="chart-${safeId}"></canvas>`;
                         zoneContainer.appendChild(wrapper);
 
@@ -563,56 +555,42 @@ if (document.getElementById('dashboard-view').classList.contains('active')) {
                         });
                     }
                 } else {
-                    // Update the existing lines smoothly without flickering the HTML
                     for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
                         if (zoneChartInstances[zoneName]) {
-                            zoneChartInstances[zoneName].data.labels = data.labels;
+                            zoneChartInstances[zoneName].data.labels           = data.labels;
                             zoneChartInstances[zoneName].data.datasets[0].data = zoneCounts;
                             zoneChartInstances[zoneName].update('none');
                         } else {
-                            // If a new building was added while we were watching, force a full redraw
                             loadCharts(true);
                             return;
                         }
                     }
                 }
 
-                // 3. UPDATE FULLSCREEN CHART MODAL IF IT IS OPEN!
                 if (document.getElementById('chartModal').classList.contains('show') && largeChartInstance) {
-                    const titleText = document.getElementById('chartModalTitle').innerText;
-                    const activeZone = titleText.split(" - ")[0]; // Get just the name, e.g., "Library"
-                    
+                    const titleText  = document.getElementById('chartModalTitle').innerText;
+                    const activeZone = titleText.split(" - ")[0];
                     if (data.zones[activeZone]) {
-                        largeChartInstance.data.labels = data.labels;
+                        largeChartInstance.data.labels           = data.labels;
                         largeChartInstance.data.datasets[0].data = data.zones[activeZone];
                         largeChartInstance.update('none');
                     }
                 }
-
             } catch (error) { console.error("Error loading charts", error); }
         }
 
-        // --- 6. CHART MODAL LOGIC ---
+        // --- 9. CHART MODAL LOGIC ---
         function openChartModal(zoneName) {
             if (!currentChartData || !currentChartData.zones[zoneName]) return;
-
             document.getElementById('chartModal').classList.add('show');
             document.getElementById('chartModalTitle').innerText = zoneName + " - Detailed Traffic History";
-
             const ctx = document.getElementById('largeZoneChart').getContext('2d');
-            if (largeChartInstance) largeChartInstance.destroy(); 
-
+            if (largeChartInstance) largeChartInstance.destroy();
             largeChartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: currentChartData.labels,
-                    datasets: [{
-                        label: 'Active Detections',
-                        data: currentChartData.zones[zoneName],
-                        borderColor: '#bb86fc',
-                        backgroundColor: 'rgba(187, 134, 252, 0.2)',
-                        borderWidth: 3, fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#fff'
-                    }]
+                    datasets: [{ label: 'Active Detections', data: currentChartData.zones[zoneName], borderColor: '#bb86fc', backgroundColor: 'rgba(187, 134, 252, 0.2)', borderWidth: 3, fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#fff' }]
                 },
                 options: {
                     responsive: true,
@@ -628,52 +606,147 @@ if (document.getElementById('dashboard-view').classList.contains('active')) {
         }
 
         window.onload = () => { switchView('dashboard'); };
-    // --- NEW: TOGGLE AI ON/OFF ---
-        async function toggleAI(camId) {
-            const btn = document.getElementById(`btn-${camId}`);
-            btn.innerText = "Loading..."; // Feedback while we ping the router
-            
+
+        // ══════════════════════════════════════════════
+        //  ANOMALY NOTIFICATION SYSTEM
+        // ══════════════════════════════════════════════
+
+        let knownAlertIds = new Set();
+        let panelIsOpen   = false;
+
+        function openNotifPanel() {
+            document.getElementById('notif-panel').classList.add('open');
+            document.getElementById('notif-overlay').classList.add('show');
+            panelIsOpen = true;
+            fetchAndRenderAlerts();
+        }
+
+        function closeNotifPanel() {
+            document.getElementById('notif-panel').classList.remove('open');
+            document.getElementById('notif-overlay').classList.remove('show');
+            panelIsOpen = false;
+        }
+
+        async function fetchAndRenderAlerts() {
             try {
-                const res = await fetch(`/api/toggle/${camId}`, { method: 'POST' });
-                const data = await res.json();
-                
-                if (data.is_active) {
-                    btn.innerText = "Stop Feed";
-                    btn.style.background = "#cf6679";
-                    btn.style.color = "black";
-                    btn.style.borderColor = "#cf6679";
-                } else {
-                    btn.innerText = "Start Feed";
-                    btn.style.background = "#333";
-                    btn.style.color = "#03dac6";
-                    btn.style.borderColor = "#03dac6";
+                const res    = await fetch('/api/anomalies');
+                const data   = await res.json();
+                const alerts = data.alerts;
+                const list   = document.getElementById('notif-list');
+                const empty  = document.getElementById('notif-empty');
+
+                list.innerHTML = '';
+
+                if (alerts.length === 0) {
+                    list.appendChild(empty);
+                    empty.style.display = 'block';
+                    return;
                 }
-            } catch (error) {
-                console.error("Toggle failed", error);
-                btn.innerText = "Error";
+
+                alerts.forEach(alert => {
+                    const item       = document.createElement('div');
+                    item.className   = 'notif-item';
+                    item.id          = `notif-item-${alert.id}`;
+                    item.innerHTML   = `
+                        <div class="notif-item-msg">🚨 ${alert.message}</div>
+                        <div class="notif-item-meta">📷 ${alert.camera_name} &nbsp;|&nbsp; 🏢 ${alert.zone_name}</div>
+                        <div class="notif-item-meta">🕐 ${alert.detected_at}</div>
+                        <button class="notif-item-dismiss" onclick="dismissAlert(${alert.id})">Dismiss</button>
+                    `;
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                console.error('[NOTIF] Fetch error:', e);
             }
         }
-    // --- NEW: TOGGLE ENTIRE ZONE FROM DASHBOARD ---
-        async function toggleGroup(groupName, action) {
-            try {
-                await fetch(`/api/toggle_group/${encodeURIComponent(groupName)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: action })
-                });
-                // The dashboard will automatically update the button color on the next 1-second tick!
-            } catch (error) { console.error("Group toggle failed", error); }
+
+        async function dismissAlert(alertId) {
+            await fetch(`/api/anomalies/dismiss/${alertId}`, { method: 'POST' });
+            const el = document.getElementById(`notif-item-${alertId}`);
+            if (el) el.remove();
+            const list = document.getElementById('notif-list');
+            if (list.children.length === 0) {
+                list.appendChild(document.getElementById('notif-empty'));
+                document.getElementById('notif-empty').style.display = 'block';
+            }
         }
-        // --- NEW: TOGGLE ALL CAMERAS (MASTER SWITCH) ---
-        async function toggleAll(action) {
-            try {
-                await fetch('/api/toggle_all', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: action })
-                });
-            } catch (error) { console.error("Master toggle failed", error); }
+
+        async function dismissAllAlerts() {
+            await fetch('/api/anomalies/dismiss_all', { method: 'POST' });
+            const list = document.getElementById('notif-list');
+            list.innerHTML = '';
+            list.appendChild(document.getElementById('notif-empty'));
+            document.getElementById('notif-empty').style.display = 'block';
+            updateBadge(0);
         }
+
+        function updateBadge(count) {
+            const badge = document.getElementById('notif-badge');
+            if (count > 0) {
+                badge.textContent   = count > 99 ? '99+' : count;
+                badge.style.display = 'block';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        function showToast(message, cameraName, zoneName) {
+            const container = document.getElementById('toast-container');
+            const toast     = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `
+                <div class="toast-title">🚨 ${message}</div>
+                <div class="toast-sub">📷 ${cameraName} &nbsp;·&nbsp; 🏢 ${zoneName}</div>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        }
+
+        async function pollUnreadCount() {
+            try {
+                const res  = await fetch('/api/anomalies/unread_count');
+                const data = await res.json();
+                updateBadge(data.unread);
+            } catch(e) {}
+        }
+
+        async function pollForNewAlerts() {
+            try {
+                const res    = await fetch('/api/anomalies/history');
+                const data   = await res.json();
+                const alerts = data.alerts;
+
+                // On first run — seed known IDs silently, no toasts
+                if (knownAlertIds.size === 0 && alerts.length > 0) {
+                    alerts.forEach(a => knownAlertIds.add(a.id));
+                    return;
+                }
+
+                alerts.forEach(alert => {
+                    if (!knownAlertIds.has(alert.id) && !alert.is_resolved) {
+                        knownAlertIds.add(alert.id);
+                        const detectedMs = new Date(alert.detected_at).getTime();
+                        if (Date.now() - detectedMs < 10000) {
+                            showToast(alert.message, alert.camera_name, alert.zone_name);
+                        }
+                    }
+                });
+            } catch(e) {}
+        }
+
+        // Boot: seed known IDs before polling starts
+        (async () => {
+            try {
+                const res  = await fetch('/api/anomalies/history');
+                const data = await res.json();
+                data.alerts.forEach(a => knownAlertIds.add(a.id));
+            } catch(e) {}
+        })();
+
+        setInterval(pollUnreadCount,  5000);
+        setInterval(pollForNewAlerts, 5000);
+        setInterval(() => { if (panelIsOpen) fetchAndRenderAlerts(); }, 10000);
+
     </script>
 </body>
 </html>
