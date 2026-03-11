@@ -12,13 +12,16 @@ from ultralytics import YOLO
 import os
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;2000000"
 
-app = Flask(__name__)
+app = Flask(__name__)   
 CORS(app)
 
 # --- CONFIGURATION ---
 DB_NAME = "campus_security.db"
 model = YOLO("yolov11_v2.engine", task="detect") # Or yolov8n.pt
 model_lock = Lock()
+
+# --- NEW: THE DATABASE BOUNCER ---
+db_lock = Lock()
 
 active_cameras = {}
 # The exact order you want the buildings to appear in Unity
@@ -34,31 +37,16 @@ UNITY_ZONE_ORDER = [
     "Campus Grounds",
     "Unassigned"
 ]
+
 # --- ANOMALY CONFIGURATION ---
-# Groups that are restricted. Gate is intentionally NOT included.
-RESTRICTED_GROUPS = [
-    "Albert Einstein Building",
-    "CET Building",
-    "CICS Building",
-    "Parking",
-    "Pathways",
-    "RGR Building",
-    "Student Center"
+# These zones are safe. EVERYTHING ELSE will trigger an alarm after hours.
+SAFE_CAMERAS = [
+    "GATE 1 ENT FENCE",
+    "GATE 2 ENT",
 ]
 
-# Friendly notification messages per group
-ANOMALY_MESSAGES = {
-    "Albert Einstein Building": "Unauthorized Access to Albert Einstein Building",
-    "CET Building":             "Unauthorized Access to CET Building",
-    "CICS Building":            "Unauthorized Access to CICS Building",
-    "Parking":                  "Unauthorized Access to Parking Area",
-    "Pathways":                 "Unauthorized Access to Pathways",
-    "RGR Building":             "Unauthorized Access to RGR Building",
-    "Student Center":           "Unauthorized Access to Student Center",
-}
-
 # Schedule: (weekday_restricted_hour, weekend_restricted_hour) in 24h format
-WEEKDAY_RESTRICTED_HOUR = 21   # After 9:00 PM
+WEEKDAY_RESTRICTED_HOUR = 21   # After 9:00 PM (Set to 13 for testing)
 WEEKEND_RESTRICTED_HOUR = 17   # After 5:00 PM
 
 # Cooldown: seconds before the same camera can re-trigger an alert
@@ -99,15 +87,24 @@ def is_restricted_now():
 
 def check_and_fire_anomaly(camera_id, camera_name, group, person_count):
     """
-    Called every time AI detects ≥1 person on a restricted camera.
-    Respects the 60-second per-camera cooldown.
+    Called every time AI detects ≥1 person.
+    Respects the 30-second per-camera cooldown.
     """
     global unread_anomaly_count
 
-    if group not in RESTRICTED_GROUPS:
+    # 1. Is this camera hardcoded to be safe? If yes, ignore.
+    if camera_name in SAFE_CAMERAS:
         return
+        
+    # Ignore cameras that haven't been assigned to a building yet
+    if group == "Unassigned":
+        return
+        
+    # 2. Is it past curfew? If no, ignore.
     if not is_restricted_now():
         return
+        
+    # 3. Is there actually a person?
     if person_count < 1:
         return
 
@@ -119,74 +116,77 @@ def check_and_fire_anomaly(camera_id, camera_name, group, person_count):
             return                   # Still in cooldown — skip
         anomaly_cooldowns[camera_id] = now_ts
 
-    message = ANOMALY_MESSAGES.get(group, f"Unauthorized Access to {group}")
+    message = f"Unauthorized Access to {group}"
 
-    # Save to DB
+    # Save to DB (LOCKED)
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute(
-                """INSERT INTO anomaly_logs
-                   (camera_id, camera_name, zone_name, message, is_resolved)
-                   VALUES (?, ?, ?, ?, 0)""",
-                (camera_id, camera_name, group, message)
-            )
-            conn.commit()
+        with db_lock:
+            with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                c = conn.cursor()
+                c.execute(
+                    """INSERT INTO anomaly_logs
+                       (camera_id, camera_name, zone_name, message, is_resolved)
+                       VALUES (?, ?, ?, ?, 0)""",
+                    (camera_id, camera_name, group, message)
+                )
+                conn.commit()
     except Exception as e:
         print(f"[ANOMALY DB ERROR] {e}")
 
     with unread_lock:
         unread_anomaly_count += 1
 
-    print(f"[ANOMALY] {message} | Camera: {camera_name} ({camera_id}) | Count: {person_count}")
+    print(f"[ANOMALY] {message} | Camera: {camera_name} | Count: {person_count}")
 
 
 def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            
+            # --- NEW: Enable WAL mode for concurrency ---
+            c.execute('PRAGMA journal_mode=WAL;')
+            c.execute('PRAGMA synchronous=NORMAL;')
 
-        c.execute('''CREATE TABLE IF NOT EXISTS cameras
-                     (id TEXT PRIMARY KEY, name TEXT, url TEXT, camera_group TEXT)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS cameras
+                         (id TEXT PRIMARY KEY, name TEXT, url TEXT, camera_group TEXT)''')
 
-        c.execute('''CREATE TABLE IF NOT EXISTS logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      camera_id TEXT, count INTEGER,
-                      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS logs
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          camera_id TEXT, count INTEGER,
+                          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
 
-        c.execute('''CREATE TABLE IF NOT EXISTS zone_logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      zone_name TEXT, count INTEGER,
-                      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS zone_logs
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          zone_name TEXT, count INTEGER,
+                          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
 
-        # NEW: Anomaly / unauthorized-access log
-        c.execute('''CREATE TABLE IF NOT EXISTS anomaly_logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      camera_id   TEXT,
-                      camera_name TEXT,
-                      zone_name   TEXT,
-                      message     TEXT,
-                      is_resolved INTEGER DEFAULT 0,
-                      detected_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-        
-        c.execute('''CREATE TABLE IF NOT EXISTS campus_logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      total_count INTEGER,
-                      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-        
-        # --- THE MISSING LINE: Create the zones table first! ---
-        c.execute('''CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)''')
-        
-        # --- NOW it is safe to count and insert ---
-        c.execute("SELECT count(*) FROM zones")
-        if c.fetchone()[0] == 0:
-            default_zones = [
-                "Albert Einstein Building", "Automotive Building", "CICS Building", 
-                "CET Building", "Campus Grounds", "SteerHub Building", 
-                "Ralph G. Recto Building", "Student Service Center", "Sparta Gymnasium"
-            ]
-            c.executemany("INSERT INTO zones (name) VALUES (?)", [(z,) for z in default_zones])
-        
-        conn.commit()
+            c.execute('''CREATE TABLE IF NOT EXISTS anomaly_logs
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          camera_id   TEXT,
+                          camera_name TEXT,
+                          zone_name   TEXT,
+                          message     TEXT,
+                          is_resolved INTEGER DEFAULT 0,
+                          detected_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+            
+            c.execute('''CREATE TABLE IF NOT EXISTS campus_logs
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          total_count INTEGER,
+                          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+            
+            c.execute('''CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)''')
+            
+            c.execute("SELECT count(*) FROM zones")
+            if c.fetchone()[0] == 0:
+                default_zones = [
+                    "Albert Einstein Building", "Automotive Building", "CICS Building", 
+                    "CET Building", "Campus Grounds", "SteerHub Building", 
+                    "Ralph G. Recto Building", "Student Service Center", "Sparta Gymnasium", "Unassigned"
+                ]
+                c.executemany("INSERT INTO zones (name) VALUES (?)", [(z,) for z in default_zones])
+            
+            conn.commit()
 
 def load_poly_from_txt(filename):
     pts = []
@@ -222,16 +222,17 @@ def analytics_logger():
             zone_counts[group] += count
 
         try:
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                for cam_id, info in active_cameras.items():
-                    c.execute("INSERT INTO logs (camera_id, count) VALUES (?, ?)",
-                              (cam_id, info['count']))
-                for zone, count in zone_counts.items():
-                    c.execute("INSERT INTO zone_logs (zone_name, count) VALUES (?, ?)",
-                              (zone, count))
-                c.execute("INSERT INTO campus_logs (total_count) VALUES (?)", (total_campus,))
-                conn.commit()
+            with db_lock:
+                with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                    c = conn.cursor()
+                    for cam_id, info in active_cameras.items():
+                        c.execute("INSERT INTO logs (camera_id, count) VALUES (?, ?)",
+                                  (cam_id, info['count']))
+                    for zone, count in zone_counts.items():
+                        c.execute("INSERT INTO zone_logs (zone_name, count) VALUES (?, ?)",
+                                  (zone, count))
+                    c.execute("INSERT INTO campus_logs (total_count) VALUES (?)", (total_campus,))
+                    conn.commit()
         except Exception as e:
             print(f"Database write error: {e}")
 
@@ -327,7 +328,6 @@ def camera_worker(camera_id, source):
                 cv2.polylines(annotated_frame, [scaled_poly],
                               isClosed=True, color=(0, 255, 255), thickness=2)
 
-            # ── ANOMALY CHECK (new) ──────────────────────────────────────
             if person_count > 0:
                 cam_info = active_cameras.get(camera_id, {})
                 check_and_fire_anomaly(
@@ -336,7 +336,6 @@ def camera_worker(camera_id, source):
                     cam_info.get('group', ''),
                     person_count
                 )
-            # ────────────────────────────────────────────────────────────
 
             if camera_id in active_cameras:
                 active_cameras[camera_id]['count']        = person_count
@@ -369,22 +368,23 @@ def stop_camera_thread(camera_id):
 
 def load_cameras_from_db():
     global active_cameras
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, name, url, camera_group FROM cameras")
-        rows = c.fetchall()
-        for row in rows:
-            cam_id, name, url, group = row
-            active_cameras[cam_id] = {
-                "name":         name,
-                "url":          url,
-                "group":        group,
-                "count":        0,
-                "is_active":    False,
-                "last_updated": time.time()
-            }
-            start_camera_thread(cam_id, url)
-        print(f"Loaded {len(rows)} cameras.")
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, name, url, camera_group FROM cameras")
+            rows = c.fetchall()
+            for row in rows:
+                cam_id, name, url, group = row
+                active_cameras[cam_id] = {
+                    "name":         name,
+                    "url":          url,
+                    "group":        group,
+                    "count":        0,
+                    "is_active":    False,
+                    "last_updated": time.time()
+                }
+                start_camera_thread(cam_id, url)
+            print(f"Loaded {len(rows)} cameras.")
 
 
 init_db()
@@ -410,10 +410,11 @@ def generate_frames(camera_id):
 
 @app.route('/')
 def index():
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT name FROM zones ORDER BY name")
-        all_zones = [row[0] for row in c.fetchall()]
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("SELECT name FROM zones ORDER BY name")
+            all_zones = [row[0] for row in c.fetchall()]
         
     return render_template('index.html', cameras=active_cameras, all_zones=all_zones)
 
@@ -422,10 +423,11 @@ def add_zone():
     zone_name = request.form.get('zone_name')
     if zone_name and zone_name.strip():
         try:
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                c.execute("INSERT INTO zones (name) VALUES (?)", (zone_name.strip(),))
-                conn.commit()
+            with db_lock:
+                with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                    c = conn.cursor()
+                    c.execute("INSERT INTO zones (name) VALUES (?)", (zone_name.strip(),))
+                    conn.commit()
         except sqlite3.IntegrityError:
             pass # Ignore if the zone already exists
     return redirect(url_for('index'))
@@ -433,20 +435,15 @@ def add_zone():
 @app.route('/api/remove_zone/<zone_name>', methods=['POST'])
 def remove_zone(zone_name):
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            
-            # 1. Delete the zone from the database
-            c.execute("DELETE FROM zones WHERE name = ?", (zone_name,))
-            
-            # 2. Create the "Unassigned" fallback zone if it doesn't exist
-            c.execute("INSERT OR IGNORE INTO zones (name) VALUES ('Unassigned')")
-            
-            # 3. Move any orphaned cameras into "Unassigned"
-            c.execute("UPDATE cameras SET camera_group = 'Unassigned' WHERE camera_group = ?", (zone_name,))
-            conn.commit()
+        with db_lock:
+            with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                c = conn.cursor()
+                
+                c.execute("DELETE FROM zones WHERE name = ?", (zone_name,))
+                c.execute("INSERT OR IGNORE INTO zones (name) VALUES ('Unassigned')")
+                c.execute("UPDATE cameras SET camera_group = 'Unassigned' WHERE camera_group = ?", (zone_name,))
+                conn.commit()
 
-        # 4. Update the active Python memory instantly
         for cam_id, info in active_cameras.items():
             if info['group'] == zone_name:
                 info['group'] = 'Unassigned'
@@ -468,11 +465,12 @@ def add_camera():
     camera_group = request.form.get('camera_group')
     new_id       = f"cam_{int(time.time())}"
 
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("INSERT INTO cameras (id, name, url, camera_group) VALUES (?, ?, ?, ?)",
-                  (new_id, camera_name, camera_url, camera_group))
-        conn.commit()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO cameras (id, name, url, camera_group) VALUES (?, ?, ?, ?)",
+                      (new_id, camera_name, camera_url, camera_group))
+            conn.commit()
 
     active_cameras[new_id] = {
         "name":      camera_name,
@@ -490,10 +488,11 @@ def remove_camera(camera_id):
     if camera_id in active_cameras:
         stop_camera_thread(camera_id)
         del active_cameras[camera_id]
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("DELETE FROM cameras WHERE id = ?", (camera_id,))
-            conn.commit()
+        with db_lock:
+            with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                c = conn.cursor()
+                c.execute("DELETE FROM cameras WHERE id = ?", (camera_id,))
+                conn.commit()
     return redirect(url_for('index'))
 
 @app.route('/api/update_camera/<camera_id>', methods=['POST'])
@@ -507,20 +506,19 @@ def update_camera(camera_id):
     if camera_id in active_cameras:
         clean_name = new_name.strip()
         
-        # 1. Update active memory
         active_cameras[camera_id]['name'] = clean_name
         if new_zone:
             active_cameras[camera_id]['group'] = new_zone
         
-        # 2. Update the SQLite Database
         try:
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                if new_zone:
-                    c.execute("UPDATE cameras SET name = ?, camera_group = ? WHERE id = ?", (clean_name, new_zone, camera_id))
-                else:
-                    c.execute("UPDATE cameras SET name = ? WHERE id = ?", (clean_name, camera_id))
-                conn.commit()
+            with db_lock:
+                with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                    c = conn.cursor()
+                    if new_zone:
+                        c.execute("UPDATE cameras SET name = ?, camera_group = ? WHERE id = ?", (clean_name, new_zone, camera_id))
+                    else:
+                        c.execute("UPDATE cameras SET name = ? WHERE id = ?", (clean_name, camera_id))
+                    conn.commit()
             return jsonify({"status": "success", "new_name": clean_name, "new_zone": new_zone})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
@@ -571,13 +569,14 @@ def toggle_camera(camera_id):
 
 @app.route('/api/history')
 def get_history():
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT timestamp, total_count FROM campus_logs ORDER BY id DESC LIMIT 20")
-        campus_data = c.fetchall()[::-1]
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("SELECT timestamp, total_count FROM campus_logs ORDER BY id DESC LIMIT 20")
+            campus_data = c.fetchall()[::-1]
 
-        c.execute("SELECT timestamp, zone_name, count FROM zone_logs ORDER BY id DESC LIMIT 200")
-        zone_data = c.fetchall()[::-1]
+            c.execute("SELECT timestamp, zone_name, count FROM zone_logs ORDER BY id DESC LIMIT 200")
+            zone_data = c.fetchall()[::-1]
 
     labels        = [row[0].split(" ")[1] for row in campus_data]
     campus_counts = [row[1] for row in campus_data]
@@ -598,26 +597,23 @@ def get_history():
 
 
 # ─────────────────────────────────────────────
-#  FLASK ROUTES — ANOMALY / NOTIFICATION (NEW)
+#  FLASK ROUTES — ANOMALY / NOTIFICATION
 # ─────────────────────────────────────────────
 
 @app.route('/api/anomalies')
 def get_anomalies():
-    """
-    Returns all unresolved anomaly alerts for the web dashboard.
-    Also resets the unread badge count once the panel is opened.
-    """
     global unread_anomaly_count
 
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, camera_id, camera_name, zone_name, message, detected_at
-            FROM anomaly_logs
-            WHERE is_resolved = 0
-            ORDER BY id DESC
-        """)
-        rows = c.fetchall()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("""
+                SELECT id, camera_id, camera_name, zone_name, message, detected_at
+                FROM anomaly_logs
+                WHERE is_resolved = 0
+                ORDER BY id DESC
+            """)
+            rows = c.fetchall()
 
     alerts = [
         {
@@ -631,7 +627,6 @@ def get_anomalies():
         for row in rows
     ]
 
-    # Reset unread badge now that the user has opened the panel
     with unread_lock:
         unread_anomaly_count = 0
 
@@ -640,10 +635,6 @@ def get_anomalies():
 
 @app.route('/api/anomalies/unread_count')
 def get_unread_count():
-    """
-    Lightweight poll endpoint for the bell badge.
-    The dashboard polls this every 5 seconds.
-    """
     with unread_lock:
         count = unread_anomaly_count
     return jsonify({"unread": count})
@@ -651,13 +642,13 @@ def get_unread_count():
 
 @app.route('/api/anomalies/dismiss/<int:anomaly_id>', methods=['POST'])
 def dismiss_anomaly(anomaly_id):
-    """Mark a single alert as resolved (keeps history)."""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("UPDATE anomaly_logs SET is_resolved = 1 WHERE id = ?",
-                      (anomaly_id,))
-            conn.commit()
+        with db_lock:
+            with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                c = conn.cursor()
+                c.execute("UPDATE anomaly_logs SET is_resolved = 1 WHERE id = ?",
+                          (anomaly_id,))
+                conn.commit()
         return jsonify({"status": "success", "id": anomaly_id})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -665,12 +656,12 @@ def dismiss_anomaly(anomaly_id):
 
 @app.route('/api/anomalies/dismiss_all', methods=['POST'])
 def dismiss_all_anomalies():
-    """Mark ALL unresolved alerts as resolved."""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("UPDATE anomaly_logs SET is_resolved = 1 WHERE is_resolved = 0")
-            conn.commit()
+        with db_lock:
+            with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                c = conn.cursor()
+                c.execute("UPDATE anomaly_logs SET is_resolved = 1 WHERE is_resolved = 0")
+                conn.commit()
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -678,16 +669,16 @@ def dismiss_all_anomalies():
 
 @app.route('/api/anomalies/history')
 def get_anomaly_history():
-    """Returns ALL anomalies (resolved + unresolved) for a history log view."""
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, camera_id, camera_name, zone_name, message, is_resolved, detected_at
-            FROM anomaly_logs
-            ORDER BY id DESC
-            LIMIT 100
-        """)
-        rows = c.fetchall()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("""
+                SELECT id, camera_id, camera_name, zone_name, message, is_resolved, detected_at
+                FROM anomaly_logs
+                ORDER BY id DESC
+                LIMIT 100
+            """)
+            rows = c.fetchall()
 
     alerts = [
         {
@@ -717,19 +708,19 @@ def get_unity_data():
         },
         "zones_list":       [],
         "cameras":          [],
-        "recent_anomalies": []      # NEW: last-5-min unauthorized access alerts
+        "recent_anomalies": []
     }
 
     zones_temp = {}
 
-    # Ensure Unity knows about ALL zones, even empty ones
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT name FROM zones")
-        for row in c.fetchall():
-            zones_temp[row[0]] = {
-                "name": row[0], "total_count": 0, "is_active": False, "has_anomaly": False
-            }
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("SELECT name FROM zones")
+            for row in c.fetchall():
+                zones_temp[row[0]] = {
+                    "name": row[0], "total_count": 0, "is_active": False, "has_anomaly": False
+                }
 
     for cam_id, info in active_cameras.items():
         count     = info['count']
@@ -744,7 +735,7 @@ def get_unity_data():
             "name":        group,
             "total_count": 0,
             "is_active":   False,
-            "has_anomaly": False   # NEW: flag so Unity can highlight the building
+            "has_anomaly": False
         })
         zones_temp[group]["total_count"] += count
         if is_active:
@@ -758,19 +749,19 @@ def get_unity_data():
             "is_active": is_active
         })
 
-    # Fetch recent anomalies (last 5 minutes, unresolved only)
     cutoff_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("""
-                SELECT id, camera_id, camera_name, zone_name, message, detected_at
-                FROM anomaly_logs
-                WHERE is_resolved = 0
-                  AND detected_at >= datetime('now', ?)
-                ORDER BY id DESC
-            """, (f"-{UNITY_ANOMALY_WINDOW_SECONDS} seconds",))
-            anomaly_rows = c.fetchall()
+        with db_lock:
+            with sqlite3.connect(DB_NAME, timeout=15) as conn:
+                c = conn.cursor()
+                c.execute("""
+                    SELECT id, camera_id, camera_name, zone_name, message, detected_at
+                    FROM anomaly_logs
+                    WHERE is_resolved = 0
+                      AND detected_at >= datetime('now', ?)
+                    ORDER BY id DESC
+                """, (f"-{UNITY_ANOMALY_WINDOW_SECONDS} seconds",))
+                anomaly_rows = c.fetchall()
 
         for row in anomaly_rows:
             zone_name = row[3]
@@ -782,7 +773,6 @@ def get_unity_data():
                 "message":     row[4],
                 "detected_at": row[5]
             })
-            # Flag the zone so Unity can highlight it red
             if zone_name in zones_temp:
                 zones_temp[zone_name]["has_anomaly"] = True
 
@@ -792,16 +782,12 @@ def get_unity_data():
     unity_payload["zones_list"] = list(zones_temp.values())
     raw_zones_list = list(zones_temp.values())
     
-    # Sort them using your custom master list
     def sort_by_priority(zone_dict):
         try:
-            # Find its exact index in your custom list
             return UNITY_ZONE_ORDER.index(zone_dict["name"])
         except ValueError:
-            # If a new zone isn't in your list yet, push it to the very bottom (999)
             return 999 
 
-    # Apply the sort and assign it to the payload
     unity_payload["zones_list"] = sorted(raw_zones_list, key=sort_by_priority)
     return jsonify(unity_payload)
 
