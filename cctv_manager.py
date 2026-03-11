@@ -17,11 +17,23 @@ CORS(app)
 
 # --- CONFIGURATION ---
 DB_NAME = "campus_security.db"
-model = YOLO("yolov11_v2.engine") # Or yolov8n.pt
+model = YOLO("yolov11_v2.engine", task="detect") # Or yolov8n.pt
 model_lock = Lock()
 
 active_cameras = {}
-
+# The exact order you want the buildings to appear in Unity
+UNITY_ZONE_ORDER = [
+    "Albert Einstein Building",
+    "CICS Building",
+    "CET Building",
+    "Sparta Gymnasium",
+    "Steer Hub Building",
+    "Ralph G. Recto Building",
+    "Student Service Center",
+    "Automotive Building",
+    "Campus Grounds",
+    "Unassigned"
+]
 # --- ANOMALY CONFIGURATION ---
 # Groups that are restricted. Gate is intentionally NOT included.
 RESTRICTED_GROUPS = [
@@ -146,11 +158,6 @@ def init_db():
                       zone_name TEXT, count INTEGER,
                       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
 
-        c.execute('''CREATE TABLE IF NOT EXISTS campus_logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      total_count INTEGER,
-                      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-
         # NEW: Anomaly / unauthorized-access log
         c.execute('''CREATE TABLE IF NOT EXISTS anomaly_logs
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,9 +167,26 @@ def init_db():
                       message     TEXT,
                       is_resolved INTEGER DEFAULT 0,
                       detected_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS campus_logs
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      total_count INTEGER,
+                      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+        
+        # --- THE MISSING LINE: Create the zones table first! ---
+        c.execute('''CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)''')
+        
+        # --- NOW it is safe to count and insert ---
+        c.execute("SELECT count(*) FROM zones")
+        if c.fetchone()[0] == 0:
+            default_zones = [
+                "Albert Einstein Building", "Automotive Building", "CICS Building", 
+                "CET Building", "Campus Grounds", "SteerHub Building", 
+                "Ralph G. Recto Building", "Student Service Center", "Sparta Gymnasium"
+            ]
+            c.executemany("INSERT INTO zones (name) VALUES (?)", [(z,) for z in default_zones])
+        
         conn.commit()
-
 
 def load_poly_from_txt(filename):
     pts = []
@@ -386,8 +410,50 @@ def generate_frames(camera_id):
 
 @app.route('/')
 def index():
-    return render_template('index.html', cameras=active_cameras)
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("SELECT name FROM zones ORDER BY name")
+        all_zones = [row[0] for row in c.fetchall()]
+        
+    return render_template('index.html', cameras=active_cameras, all_zones=all_zones)
 
+@app.route('/add_zone', methods=['POST'])
+def add_zone():
+    zone_name = request.form.get('zone_name')
+    if zone_name and zone_name.strip():
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                c = conn.cursor()
+                c.execute("INSERT INTO zones (name) VALUES (?)", (zone_name.strip(),))
+                conn.commit()
+        except sqlite3.IntegrityError:
+            pass # Ignore if the zone already exists
+    return redirect(url_for('index'))
+
+@app.route('/api/remove_zone/<zone_name>', methods=['POST'])
+def remove_zone(zone_name):
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            
+            # 1. Delete the zone from the database
+            c.execute("DELETE FROM zones WHERE name = ?", (zone_name,))
+            
+            # 2. Create the "Unassigned" fallback zone if it doesn't exist
+            c.execute("INSERT OR IGNORE INTO zones (name) VALUES ('Unassigned')")
+            
+            # 3. Move any orphaned cameras into "Unassigned"
+            c.execute("UPDATE cameras SET camera_group = 'Unassigned' WHERE camera_group = ?", (zone_name,))
+            conn.commit()
+
+        # 4. Update the active Python memory instantly
+        for cam_id, info in active_cameras.items():
+            if info['group'] == zone_name:
+                info['group'] = 'Unassigned'
+
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/video_feed/<camera_id>')
 def video_feed(camera_id):
@@ -430,25 +496,32 @@ def remove_camera(camera_id):
             conn.commit()
     return redirect(url_for('index'))
 
-@app.route('/api/rename_camera/<camera_id>', methods=['POST'])
-def rename_camera(camera_id):
+@app.route('/api/update_camera/<camera_id>', methods=['POST'])
+def update_camera(camera_id):
     new_name = request.json.get('new_name')
+    new_zone = request.json.get('new_zone')
     
     if not new_name or not new_name.strip():
         return jsonify({"status": "error", "message": "Name cannot be empty"}), 400
         
     if camera_id in active_cameras:
         clean_name = new_name.strip()
+        
         # 1. Update active memory
         active_cameras[camera_id]['name'] = clean_name
+        if new_zone:
+            active_cameras[camera_id]['group'] = new_zone
         
         # 2. Update the SQLite Database
         try:
             with sqlite3.connect(DB_NAME) as conn:
                 c = conn.cursor()
-                c.execute("UPDATE cameras SET name = ? WHERE id = ?", (clean_name, camera_id))
+                if new_zone:
+                    c.execute("UPDATE cameras SET name = ?, camera_group = ? WHERE id = ?", (clean_name, new_zone, camera_id))
+                else:
+                    c.execute("UPDATE cameras SET name = ? WHERE id = ?", (clean_name, camera_id))
                 conn.commit()
-            return jsonify({"status": "success", "new_name": clean_name})
+            return jsonify({"status": "success", "new_name": clean_name, "new_zone": new_zone})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
             
@@ -649,6 +722,15 @@ def get_unity_data():
 
     zones_temp = {}
 
+    # Ensure Unity knows about ALL zones, even empty ones
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("SELECT name FROM zones")
+        for row in c.fetchall():
+            zones_temp[row[0]] = {
+                "name": row[0], "total_count": 0, "is_active": False, "has_anomaly": False
+            }
+
     for cam_id, info in active_cameras.items():
         count     = info['count']
         group     = info['group']
@@ -708,6 +790,19 @@ def get_unity_data():
         print(f"[UNITY ANOMALY FETCH ERROR] {e}")
 
     unity_payload["zones_list"] = list(zones_temp.values())
+    raw_zones_list = list(zones_temp.values())
+    
+    # Sort them using your custom master list
+    def sort_by_priority(zone_dict):
+        try:
+            # Find its exact index in your custom list
+            return UNITY_ZONE_ORDER.index(zone_dict["name"])
+        except ValueError:
+            # If a new zone isn't in your list yet, push it to the very bottom (999)
+            return 999 
+
+    # Apply the sort and assign it to the payload
+    unity_payload["zones_list"] = sorted(raw_zones_list, key=sort_by_priority)
     return jsonify(unity_payload)
 
 

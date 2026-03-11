@@ -2,7 +2,7 @@ import cv2
 import os
 
 # --- SETTINGS ---
-CAMERA_ID = "cam_1772497665"  # Change this for each camera
+CAMERA_ID = "cam_1773191408"  # Change this for each camera
 FILENAME = f"{CAMERA_ID}_coords.txt"
 points = []
 
@@ -19,7 +19,7 @@ def click_event(event, x, y, flags, params):
         cv2.imshow('Coordinate Finder', img_display)
 
 # 1. Load your image
-img_path = 'pathway-turn_0001.jpg'
+img_path = 'fountain-R_0004.jpg'
 img_raw = cv2.imread(img_path)
 # Standardize the window size so coordinates are consistent
 img_display = cv2.resize(img_raw, (1920, 1080))

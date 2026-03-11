@@ -28,9 +28,18 @@
         <div class="modal-content" style="background: #1e1e1e; padding: 25px; width: 90%; max-width: 400px; border-color: #bb86fc; cursor: default;" onclick="event.stopPropagation()">
             <h2 style="color: #bb86fc; margin-top: 0; margin-bottom: 20px;"><i class="fas fa-cog"></i> Camera Settings</h2>
             
-            <div style="margin-bottom: 20px;">
-                <label style="color: #888; font-size: 0.85rem; display: block; margin-bottom: 8px;">Rename Camera</label>
+            <div style="margin-bottom: 15px;">
+                <label style="color: #888; font-size: 0.85rem; display: block; margin-bottom: 8px;">Camera Name</label>
                 <input type="text" id="editCamNameInput" style="width: 100%; padding: 12px; background: #000; border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box; font-family: inherit; font-size: 1rem;">
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="color: #888; font-size: 0.85rem; display: block; margin-bottom: 8px;">Assigned Zone</label>
+                <select id="editCamZoneInput" style="width: 100%; padding: 12px; background: #000; border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box; font-family: inherit; font-size: 1rem;">
+                    {% for zone in all_zones %}
+                        <option value="{{ zone }}">{{ zone }}</option>
+                    {% endfor %}
+                </select>
             </div>
             
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 30px; border-top: 1px solid #333; padding-top: 20px;">
@@ -40,6 +49,45 @@
                 
                 <button onclick="saveCamSettings()" style="background: #bb86fc; border: none; color: black; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;">
                     Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+    </div>
+    <div id="deleteZoneModal" class="modal" onclick="closeDeleteZoneModal(event)">
+        <span class="close-modal" onclick="closeDeleteZoneModal(event)">&times;</span>
+        <div class="modal-content" style="background: #1e1e1e; padding: 25px; width: 90%; max-width: 400px; border-color: #cf6679; cursor: default;" onclick="event.stopPropagation()">
+            <h2 style="color: #cf6679; margin-top: 0; margin-bottom: 15px;"><i class="fas fa-exclamation-triangle"></i> Delete Zone</h2>
+            
+            <p style="color: #e0e0e0; font-size: 1rem; line-height: 1.5; margin-bottom: 10px;">
+                Are you sure you want to delete the <strong id="deleteZoneNameDisplay" style="color: #bb86fc;"></strong> zone?
+            </p>
+            <p style="color: #888; font-size: 0.85rem; margin-bottom: 25px;">
+                Any cameras currently inside this zone will be safely moved to "Unassigned".
+            </p>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #333; padding-top: 20px;">
+                <button onclick="closeDeleteZoneModal()" style="background: transparent; border: 1px solid #888; color: #888; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;" onmouseover="this.style.color='#fff'; this.style.borderColor='#fff'" onmouseout="this.style.color='#888'; this.style.borderColor='#888'">
+                    Cancel
+                </button>
+                
+                <button onclick="confirmDeleteZone()" style="background: #cf6679; border: none; color: black; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                    Delete Zone
+                </button>
+            </div>
+        </div>
+    </div>
+    <div id="systemAlertModal" class="modal" onclick="closeSystemAlert(event)">
+        <span class="close-modal" onclick="closeSystemAlert(event)">&times;</span>
+        <div class="modal-content" style="background: #1e1e1e; padding: 25px; width: 90%; max-width: 400px; border-color: #ffb86c; cursor: default;" onclick="event.stopPropagation()">
+            <h2 id="systemAlertTitle" style="color: #ffb86c; margin-top: 0; margin-bottom: 15px;"><i class="fas fa-exclamation-circle"></i> Notice</h2>
+            
+            <p id="systemAlertMessage" style="color: #e0e0e0; font-size: 1rem; line-height: 1.5; margin-bottom: 25px;">
+                </p>
+            
+            <div style="display: flex; justify-content: flex-end; border-top: 1px solid #333; padding-top: 20px;">
+                <button onclick="closeSystemAlert()" style="background: #ffb86c; border: none; color: black; padding: 8px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                    OK
                 </button>
             </div>
         </div>
@@ -66,18 +114,25 @@
                         <input type="text" name="camera_name" placeholder="Location Name" required>
                         <input type="text" name="camera_url" placeholder="RTSP Link or '0'" required>
                         <select name="camera_group">
-                            <option value="Albert Einstein Building">Albert Einstein Building</option>
-                            <option value="Automotive Building">Automotive Building</option>
-                            <option value="CICS Building">CICS Building</option>                            
-                            <option value="CET Building">CET Building</option>
-                            <option value="Campus Grounds">Campus Grounds</option>
-                            <option value="Steer Hub Building">Steer Hub Building</option>
-                            <option value="Ralph G. Recto Building">Ralph G. Recto Building</option>
-                            <option value="Student Service Center">Student Service Center</option>
-                            <option value="Sparta Gymnasium">Sparta Gymnasium</option>
+                            {% for zone in all_zones %}
+                                <option value="{{ zone }}">{{ zone }}</option>
+                            {% endfor %}
                             
                         </select>
                         <button type="submit" class="action-btn">Add Stream</button>
+                    </form>
+                </div>
+            </li>
+            <li class="menu-item" id="manage-zone-drop">
+                <a class="menu-link" onclick="toggleDropdown('manage-zone-drop')">
+                    <div class="menu-icon"><i class="fas fa-plus-square"></i></div>
+                    <span class="menu-text">Manage Zones</span>
+                    <i class="fas fa-chevron-down dropdown-arrow"></i>
+                </a>
+                <div class="dropdown-content">
+                    <form action="/add_zone" method="POST">
+                        <input type="text" name="zone_name" placeholder="New Building Name" required>
+                        <button type="submit" class="action-btn" style="background: #03dac6;">Create Zone</button>
                     </form>
                 </div>
             </li>
@@ -137,36 +192,29 @@
             <div id="zones-view" class="view-section">
                 <h3 style="border-bottom: 1px solid #444; padding-bottom: 10px; margin-top:0;">Select a Camera Zone</h3>
                 
-                {% set unique_groups = [] %}
-                {% for cam_id, info in cameras.items() %}
-                    {% if info.group not in unique_groups %}
-                        {% set _ = unique_groups.append(info.group) %}
+                <div class="dashboard-grid">
+                    {% for group in all_zones %}
+                    
+                    {% set icon_class = 'fa-building' %}
+                    {% if 'Parking' in group %} {% set icon_class = 'fa-car' %}
+                    {% elif 'Gate' in group %} {% set icon_class = 'fa-archway' %}
+                    {% elif 'Pathway' in group %} {% set icon_class = 'fa-road' %}
+                    {% elif 'Unassigned' in group %} {% set icon_class = 'fa-question-circle' %}
                     {% endif %}
-                {% endfor %}
 
-                {% if unique_groups|length == 0 %}
-                    <div class="empty-state" style="display:block;">
-                        <h3>No cameras connected.</h3>
-                        <p>Use "Manage Streams" in the sidebar to add your first camera.</p>
-                    </div>
-                {% else %}
-                    <div class="dashboard-grid">
-                        {% for group in unique_groups %}
+                    <div class="zone-folder" style="position: relative;" onclick="viewZone('{{ group }}')">
                         
-                        {% set icon_class = 'fa-building' %}
-                        {% if 'Parking' in group %} {% set icon_class = 'fa-car' %}
-                        {% elif 'Gate' in group %} {% set icon_class = 'fa-archway' %}
-                        {% elif 'Pathway' in group %} {% set icon_class = 'fa-road' %}
+                        {% if group != 'Unassigned' %}
+                        <span onclick="deleteZone(event, '{{ group }}')" style="position: absolute; top: 10px; right: 15px; color: #444; transition: color 0.2s;" onmouseover="this.style.color='#cf6679'" onmouseout="this.style.color='#444'" title="Delete Zone">
+                            <i class="fas fa-trash" style="font-size: 1rem !important; margin-bottom: 0 !important; color: inherit !important;"></i>
+                        </span>
                         {% endif %}
-
-                        <div class="zone-folder" onclick="viewZone('{{ group }}')">
-                            <i class="fas {{ icon_class }}"></i>
-                            <h3>{{ group }}</h3>
-                            <p style="color: #888; font-size: 0.85rem; margin-top: 5px;">Click to view streams</p>
-                        </div>
-                        {% endfor %}
+                        <i class="fas {{ icon_class }}"></i>
+                        <h3>{{ group }}</h3>
+                        <p style="color: #888; font-size: 0.8rem; margin-top: 5px;">Click to view streams</p>
                     </div>
-                {% endif %}
+                    {% endfor %}
+                </div>
             </div>
 
             <div id="live-view" class="view-section">
@@ -189,7 +237,7 @@
 
                 <div class="grid-container" id="video-grid">
                     {% for cam_id, info in cameras.items() %}
-                    <div class="video-card cam-card" data-group="{{ info.group }}">
+                    <div class="video-card cam-card" id="cam-card-{{ cam_id }}" data-group="{{ info.group }}">
                         <div class="video-header" style="align-items: flex-start;">
                             <div style="display: flex; flex-direction: column; gap: 4px; margin-left: 8px;">
                                 <span id="name-live-{{ cam_id }}" style="font-weight:bold; font-size: 1.05rem;">{{ info.name }}</span>
@@ -775,22 +823,22 @@
 
         // --- 10. RENAME CAMERA LOGIC ---
        // --- 10. CAMERA SETTINGS MODAL LOGIC ---
+// --- 10. CAMERA SETTINGS MODAL LOGIC ---
         let activeSettingsCamId = null;
 
         function openCamSettings(camId) {
             activeSettingsCamId = camId;
-            // Grab the current name directly from the screen so it's always accurate
             const currentName = document.getElementById(`name-live-${camId}`).innerText;
+            const currentZone = document.getElementById(`cam-card-${camId}`).getAttribute('data-group');
             
             document.getElementById('editCamNameInput').value = currentName;
-            document.getElementById('camSettingsModal').classList.add('show');
+            document.getElementById('editCamZoneInput').value = currentZone;
             
-            // Auto-focus the input box so you can start typing immediately
+            document.getElementById('camSettingsModal').classList.add('show');
             setTimeout(() => document.getElementById('editCamNameInput').focus(), 100);
         }
 
         function closeCamSettings(e) {
-            // Only close if they click the 'X' or the dark background outside the modal
             if (e && e.target.id !== 'camSettingsModal' && !e.target.classList.contains('close-modal')) return;
             document.getElementById('camSettingsModal').classList.remove('show');
             activeSettingsCamId = null;
@@ -800,34 +848,46 @@
             if (!activeSettingsCamId) return;
             
             const newName = document.getElementById('editCamNameInput').value.trim();
+            const newZone = document.getElementById('editCamZoneInput').value;
+            
             const nameSpan = document.getElementById(`name-live-${activeSettingsCamId}`);
             const currentName = nameSpan.innerText;
+            const currentZone = document.getElementById(`cam-card-${activeSettingsCamId}`).getAttribute('data-group');
             
-            if (newName !== "" && newName !== currentName) {
+            // If they actually changed something
+            if (newName !== "" && (newName !== currentName || newZone !== currentZone)) {
                 try {
-                    const res = await fetch(`/api/rename_camera/${activeSettingsCamId}`, {
+                    const res = await fetch(`/api/update_camera/${activeSettingsCamId}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ new_name: newName })
+                        body: JSON.stringify({ new_name: newName, new_zone: newZone })
                     });
                     
                     const data = await res.json();
                     
                     if (data.status === 'success') {
-                        nameSpan.innerText = data.new_name;
-                        showToast(`Camera renamed successfully`, data.new_name, "System Update");
+                        if (data.new_zone !== currentZone) {
+                            // If they moved it to a new building, reload to refresh the UI grids cleanly
+                            window.location.reload();
+                        } else {
+                            // If they just renamed it, update text seamlessly
+                            nameSpan.innerText = data.new_name;
+                            showToast(`Camera settings saved`, data.new_name, data.new_zone);
+                            document.getElementById('camSettingsModal').classList.remove('show');
+                            activeSettingsCamId = null;
+                        }
                     } else {
-                        alert("Error renaming camera: " + data.message);
+                        alert("Error updating camera: " + data.message);
                     }
                 } catch (error) {
-                    console.error("Rename failed", error);
+                    console.error("Update failed", error);
                     alert("Failed to communicate with the server.");
                 }
+            } else {
+                // No changes made, just close
+                document.getElementById('camSettingsModal').classList.remove('show');
+                activeSettingsCamId = null;
             }
-            
-            // Close the modal and reset manually
-            document.getElementById('camSettingsModal').classList.remove('show');
-            activeSettingsCamId = null;
         }
 
         function deleteCamFromSettings() {
@@ -837,6 +897,67 @@
             if (confirm("Are you sure you want to permanently delete this camera stream?")) {
                 window.location.href = `/remove_camera/${activeSettingsCamId}`;
             }
+        }
+
+// --- 11. DELETE ZONE LOGIC (CUSTOM UI) ---
+        let activeZoneToDelete = null;
+
+        function deleteZone(event, zoneName) {
+            // Stop the click from opening the folder!
+            event.stopPropagation();
+
+            // Prevent deleting the fallback zone
+            if (zoneName === 'Unassigned') {
+                showSystemAlert("System Protected", "You cannot delete the 'Unassigned' system folder. It is required to safely hold orphaned cameras.");
+                return;
+            }
+
+            // Set up the modal and show it
+            activeZoneToDelete = zoneName;
+            document.getElementById('deleteZoneNameDisplay').innerText = zoneName;
+            document.getElementById('deleteZoneModal').classList.add('show');
+        }
+
+        function closeDeleteZoneModal(e) {
+            // Only close if they click the 'X', the Cancel button, or the dark background
+            if (e && e.target.id !== 'deleteZoneModal' && !e.target.classList.contains('close-modal')) return;
+            document.getElementById('deleteZoneModal').classList.remove('show');
+            activeZoneToDelete = null;
+        }
+
+        async function confirmDeleteZone() {
+            if (!activeZoneToDelete) return;
+            
+            try {
+                const res = await fetch(`/api/remove_zone/${encodeURIComponent(activeZoneToDelete)}`, { 
+                    method: 'POST' 
+                });
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    // Reload the page to regenerate the folders and sidebar dropdowns
+                    window.location.reload();
+                } else {
+                    alert("Error deleting zone: " + data.message);
+                }
+            } catch (error) {
+                console.error("Delete zone failed", error);
+                alert("Failed to communicate with the server.");
+            } finally {
+                // Ensure the modal closes even if there's an error
+                closeDeleteZoneModal();
+            }
+        }
+        // --- 12. REUSABLE SYSTEM ALERT LOGIC ---
+        function showSystemAlert(title, message) {
+            document.getElementById('systemAlertTitle').innerHTML = `<i class="fas fa-exclamation-circle"></i> ${title}`;
+            document.getElementById('systemAlertMessage').innerText = message;
+            document.getElementById('systemAlertModal').classList.add('show');
+        }
+
+        function closeSystemAlert(e) {
+            if (e && e.target.id !== 'systemAlertModal' && !e.target.classList.contains('close-modal')) return;
+            document.getElementById('systemAlertModal').classList.remove('show');
         }
 
     </script>
