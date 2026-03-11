@@ -430,6 +430,29 @@ def remove_camera(camera_id):
             conn.commit()
     return redirect(url_for('index'))
 
+@app.route('/api/rename_camera/<camera_id>', methods=['POST'])
+def rename_camera(camera_id):
+    new_name = request.json.get('new_name')
+    
+    if not new_name or not new_name.strip():
+        return jsonify({"status": "error", "message": "Name cannot be empty"}), 400
+        
+    if camera_id in active_cameras:
+        clean_name = new_name.strip()
+        # 1. Update active memory
+        active_cameras[camera_id]['name'] = clean_name
+        
+        # 2. Update the SQLite Database
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                c = conn.cursor()
+                c.execute("UPDATE cameras SET name = ? WHERE id = ?", (clean_name, camera_id))
+                conn.commit()
+            return jsonify({"status": "success", "new_name": clean_name})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+            
+    return jsonify({"status": "error", "message": "Camera not found"}), 404
 
 @app.route('/api/stats')
 def get_stats():
