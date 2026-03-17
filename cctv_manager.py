@@ -283,6 +283,15 @@ def camera_worker(camera_id, source):
 
         success, frame = cap.read()
 
+        # # --- PRESENTATION MODE: LOOP LOCAL VIDEOS ---
+        # # If the video ends (success is False), but the source is a local video file (.mp4/.avi)
+        # if not success and source.endswith(('.mp4', '.avi', '.mkv')):
+        #     # Rewind the video back to frame 0
+        #     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        #     # Try reading the first frame again
+        #     success, frame = cap.read()
+        # # ---------------------------------------------
+
         if not success:
             offline_frame = np.zeros((360, 640, 3), dtype=np.uint8)
             text      = "CAMERA OFFLINE"
