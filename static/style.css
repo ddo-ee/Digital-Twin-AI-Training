@@ -76,21 +76,10 @@ body::before {
     text-overflow: ellipsis;
 }
 
-/* --- 4. TOP STRIP ACTIONS & NOTIFICATION BELL --- */
-.top-strip-actions {
-    margin-left: auto;
-    display: inline-flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 16px;
-    flex: 0 0 auto;
-    white-space: nowrap;
-}
-
+/* --- 4. NOTIFICATION BELL (inline in top-strip) --- */
 #notif-bell-btn {
-    flex: 0 0 auto;
+    flex-shrink: 1;
+    margin: auto 0 auto auto;          /* pushes bell to the far right */
     background: transparent;
     border: 1.5px solid #334155;
     border-radius: 50%;
@@ -114,27 +103,6 @@ body::before {
     height: 15px;
     color: #f1f5f9;
     display: block;             /* removes inline gap that can cause overflow */
-}
-
-.logout-btn {
-    display: inline-flex;
-    align-items: center;
-    flex: 0 0 auto;
-    gap: 8px;
-    padding: 7px 12px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 999px;
-    background: rgba(15, 23, 42, 0.8);
-    color: #f1f5f9;
-    text-decoration: none;
-    font-size: 0.9rem;
-    transition: background 0.2s, border-color 0.2s, color 0.2s;
-}
-
-.logout-btn:hover {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(248, 113, 113, 0.4);
-    color: #fff;
 }
 
 /* Red unread badge */
