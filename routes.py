@@ -1,10 +1,10 @@
 import time
 
-from flask import Response, jsonify, redirect, render_template, request, url_for
+from flask import Response, jsonify, redirect, render_template, request, session, url_for
 
 import anomalies
 from camera_streams import generate_frames, start_camera_thread, stop_camera_thread
-from config import UNITY_ANOMALY_WINDOW_SECONDS, UNITY_ZONE_ORDER
+from config import LOGIN_PASSWORD, LOGIN_USERNAME, UNITY_ANOMALY_WINDOW_SECONDS, UNITY_ZONE_ORDER
 from database import (
     add_zone,
     delete_camera,
@@ -21,7 +21,54 @@ from database import (
 )
 
 
+def _is_safe_next_url(next_url):
+    return bool(next_url) and next_url.startswith("/") and not next_url.startswith("//")
+
+
 def register_routes(app, camera_registry):
+    @app.before_request
+    def require_login():
+        allowed_endpoints = {"login", "logout", "static"}
+        if request.endpoint in allowed_endpoints or request.path == "/login":
+            return None
+
+        if request.path == "/":
+            if session.get("authenticated"):
+                return None
+            return redirect(url_for("login", next=request.path))
+
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error = None
+        next_url = request.args.get("next")
+
+        if request.method == "POST":
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            next_url = request.form.get("next") or next_url
+
+            if username == LOGIN_USERNAME and password == LOGIN_PASSWORD:
+                session.clear()
+                session["authenticated"] = True
+                session["username"] = username
+                if _is_safe_next_url(next_url):
+                    return redirect(next_url)
+                return redirect(url_for("index"))
+
+            error = "Invalid username or password."
+
+        if session.get("authenticated"):
+            return redirect(url_for("index"))
+
+        return render_template("login.html", error=error, next_url=next_url, username=LOGIN_USERNAME)
+
+    @app.route("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
     @app.route("/")
     def index():
         return render_template(
