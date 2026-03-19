@@ -1,9 +1,19 @@
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 from config import DB_NAME, DEFAULT_ZONES
 
 db_lock = Lock()
+PH_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def _ph_now_str():
+    return datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _ph_cutoff_str(window_seconds):
+    return (datetime.now(PH_TIMEZONE) - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def init_db():
@@ -140,11 +150,21 @@ def insert_analytics(cameras_snapshot, zone_counts, total_campus):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
+            timestamp = _ph_now_str()
             for cam_id, info in cameras_snapshot.items():
-                c.execute("INSERT INTO logs (camera_id, count) VALUES (?, ?)", (cam_id, info["count"]))
+                c.execute(
+                    "INSERT INTO logs (camera_id, count, timestamp) VALUES (?, ?, ?)",
+                    (cam_id, info["count"], timestamp),
+                )
             for zone, count in zone_counts.items():
-                c.execute("INSERT INTO zone_logs (zone_name, count) VALUES (?, ?)", (zone, count))
-            c.execute("INSERT INTO campus_logs (total_count) VALUES (?)", (total_campus,))
+                c.execute(
+                    "INSERT INTO zone_logs (zone_name, count, timestamp) VALUES (?, ?, ?)",
+                    (zone, count, timestamp),
+                )
+            c.execute(
+                "INSERT INTO campus_logs (total_count, timestamp) VALUES (?, ?)",
+                (total_campus, timestamp),
+            )
             conn.commit()
 
 
@@ -165,9 +185,9 @@ def insert_anomaly(camera_id, camera_name, zone_name, detected_count, message):
             c = conn.cursor()
             c.execute(
                 """INSERT INTO anomaly_logs
-                   (camera_id, camera_name, zone_name, detected_count, message, is_resolved)
-                   VALUES (?, ?, ?, ?, ?, 0)""",
-                (camera_id, camera_name, zone_name, detected_count, message),
+                   (camera_id, camera_name, zone_name, detected_count, message, is_resolved, detected_at)
+                   VALUES (?, ?, ?, ?, ?, 0, ?)""",
+                (camera_id, camera_name, zone_name, detected_count, message, _ph_now_str()),
             )
             conn.commit()
 
@@ -228,9 +248,9 @@ def fetch_recent_unresolved_anomalies(window_seconds):
                 SELECT id, camera_id, camera_name, zone_name, detected_count, message, detected_at
                 FROM anomaly_logs
                 WHERE is_resolved = 0
-                  AND detected_at >= datetime('now', ?)
+                  AND detected_at >= ?
                 ORDER BY id DESC
                 """,
-                (f"-{window_seconds} seconds",),
+                (_ph_cutoff_str(window_seconds),),
             )
             return c.fetchall()

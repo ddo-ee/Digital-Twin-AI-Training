@@ -184,11 +184,6 @@ def camera_worker(camera_registry, camera_id, source):
                 person_count,
             )
 
-            print(
-                f"[COUNT] Camera: {cam_info.get('name', camera_id)} | "
-                f"Zone: {cam_info.get('group', '')} | Count: {person_count}"
-            )
-
             camera_registry.update_detection(camera_id, person_count, time.time())
 
             ret, buffer = cv2.imencode(".jpg", annotated_frame)
