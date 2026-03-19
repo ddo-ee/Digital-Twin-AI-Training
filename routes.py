@@ -4,7 +4,13 @@ from flask import Response, jsonify, redirect, render_template, request, session
 
 import anomalies
 from camera_streams import generate_frames, start_camera_thread, stop_camera_thread
-from config import LOGIN_PASSWORD, LOGIN_USERNAME, UNITY_ANOMALY_WINDOW_SECONDS, UNITY_ZONE_ORDER
+from config import (
+    FLOOR_OPTIONS_BY_ZONE,
+    LOGIN_PASSWORD,
+    LOGIN_USERNAME,
+    UNITY_ANOMALY_WINDOW_SECONDS,
+    UNITY_ZONE_ORDER,
+)
 from database import (
     add_zone,
     delete_camera,
@@ -23,6 +29,13 @@ from database import (
 
 def _is_safe_next_url(next_url):
     return bool(next_url) and next_url.startswith("/") and not next_url.startswith("//")
+
+
+def _camera_floor_lookup(camera_registry):
+    return {
+        cam_id: info.get("floor", "")
+        for cam_id, info in camera_registry.snapshot().items()
+    }
 
 
 def register_routes(app, camera_registry):
@@ -74,6 +87,7 @@ def register_routes(app, camera_registry):
         return render_template(
             "index.html",
             cameras=camera_registry.snapshot(),
+            floor_options_by_zone=FLOOR_OPTIONS_BY_ZONE,
             all_zones=fetch_zones(order_by_name=True),
         )
 
@@ -105,15 +119,17 @@ def register_routes(app, camera_registry):
         camera_name = request.form.get("camera_name")
         camera_url = request.form.get("camera_url")
         camera_group = request.form.get("camera_group")
+        camera_floor = request.form.get("camera_floor", "").strip()
         new_id = f"cam_{int(time.time())}"
 
-        insert_camera(new_id, camera_name, camera_url, camera_group)
+        insert_camera(new_id, camera_name, camera_url, camera_group, camera_floor)
         camera_registry.add(
             new_id,
             {
                 "name": camera_name,
                 "url": camera_url,
                 "group": camera_group,
+                "floor": camera_floor,
                 "count": 0,
                 "is_active": False,
                 "last_updated": time.time(),
@@ -134,20 +150,30 @@ def register_routes(app, camera_registry):
     def update_camera_route(camera_id):
         new_name = request.json.get("new_name")
         new_zone = request.json.get("new_zone")
+        new_floor = request.json.get("new_floor", "")
 
         if not new_name or not new_name.strip():
             return jsonify({"status": "error", "message": "Name cannot be empty"}), 400
 
         if camera_registry.has(camera_id):
             clean_name = new_name.strip()
+            clean_floor = (new_floor or "").strip()
             try:
-                update_camera(camera_id, clean_name, new_zone)
+                update_camera(camera_id, clean_name, new_zone, clean_floor)
                 camera_registry.update_camera(
                     camera_id,
                     name=clean_name,
                     group=new_zone if new_zone else None,
+                    floor=clean_floor,
                 )
-                return jsonify({"status": "success", "new_name": clean_name, "new_zone": new_zone})
+                return jsonify(
+                    {
+                        "status": "success",
+                        "new_name": clean_name,
+                        "new_zone": new_zone,
+                        "new_floor": clean_floor,
+                    }
+                )
             except Exception as e:
                 return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -161,6 +187,7 @@ def register_routes(app, camera_registry):
                 "name": info["name"],
                 "count": info["count"],
                 "group": info["group"],
+                "floor": info.get("floor", ""),
                 "is_active": info.get("is_active", False),
                 "last_updated": info.get("last_updated", time.time()),
             }
@@ -211,14 +238,17 @@ def register_routes(app, camera_registry):
     @app.route("/api/anomalies")
     def get_anomalies():
         rows = fetch_active_anomalies()
+        floor_lookup = _camera_floor_lookup(camera_registry)
         alerts = [
             {
                 "id": row[0],
                 "camera_id": row[1],
                 "camera_name": row[2],
                 "zone_name": row[3],
-                "message": row[4],
-                "detected_at": row[5],
+                "detected_count": row[4],
+                "floor": floor_lookup.get(row[1], ""),
+                "message": row[5],
+                "detected_at": row[6],
             }
             for row in rows
         ]
@@ -248,15 +278,18 @@ def register_routes(app, camera_registry):
     @app.route("/api/anomalies/history")
     def get_anomaly_history():
         rows = fetch_anomaly_history(limit=100)
+        floor_lookup = _camera_floor_lookup(camera_registry)
         alerts = [
             {
                 "id": row[0],
                 "camera_id": row[1],
                 "camera_name": row[2],
                 "zone_name": row[3],
-                "message": row[4],
-                "is_resolved": bool(row[5]),
-                "detected_at": row[6],
+                "detected_count": row[4],
+                "floor": floor_lookup.get(row[1], ""),
+                "message": row[5],
+                "is_resolved": bool(row[6]),
+                "detected_at": row[7],
             }
             for row in rows
         ]
@@ -312,12 +345,14 @@ def register_routes(app, camera_registry):
                 "id": cam_id,
                 "name": info["name"],
                 "zone": group,
+                "floor": info.get("floor", ""),
                 "count": count,
                 "is_active": is_active,
             })
 
         try:
             anomaly_rows = fetch_recent_unresolved_anomalies(UNITY_ANOMALY_WINDOW_SECONDS)
+            floor_lookup = _camera_floor_lookup(camera_registry)
             for row in anomaly_rows:
                 zone_name = row[3]
                 unity_payload["recent_anomalies"].append({
@@ -325,8 +360,10 @@ def register_routes(app, camera_registry):
                     "camera_id": row[1],
                     "camera_name": row[2],
                     "zone_name": zone_name,
-                    "message": row[4],
-                    "detected_at": row[5],
+                    "detected_count": row[4],
+                    "floor": floor_lookup.get(row[1], ""),
+                    "message": row[5],
+                    "detected_at": row[6],
                 })
                 if zone_name in zones_temp:
                     zones_temp[zone_name]["has_anomaly"] = True

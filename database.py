@@ -15,7 +15,7 @@ def init_db():
 
             c.execute(
                 """CREATE TABLE IF NOT EXISTS cameras
-                   (id TEXT PRIMARY KEY, name TEXT, url TEXT, camera_group TEXT)"""
+                   (id TEXT PRIMARY KEY, name TEXT, url TEXT, camera_group TEXT, floor TEXT)"""
             )
             c.execute(
                 """CREATE TABLE IF NOT EXISTS logs
@@ -35,6 +35,7 @@ def init_db():
                     camera_id   TEXT,
                     camera_name TEXT,
                     zone_name   TEXT,
+                    detected_count INTEGER DEFAULT 0,
                     message     TEXT,
                     is_resolved INTEGER DEFAULT 0,
                     detected_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
@@ -46,6 +47,16 @@ def init_db():
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"""
             )
             c.execute("""CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)""")
+
+            c.execute("PRAGMA table_info(cameras)")
+            camera_columns = {row[1] for row in c.fetchall()}
+            if "floor" not in camera_columns:
+                c.execute("ALTER TABLE cameras ADD COLUMN floor TEXT")
+
+            c.execute("PRAGMA table_info(anomaly_logs)")
+            anomaly_columns = {row[1] for row in c.fetchall()}
+            if "detected_count" not in anomaly_columns:
+                c.execute("ALTER TABLE anomaly_logs ADD COLUMN detected_count INTEGER DEFAULT 0")
 
             c.execute("SELECT count(*) FROM zones")
             if c.fetchone()[0] == 0:
@@ -85,17 +96,17 @@ def fetch_cameras():
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
-            c.execute("SELECT id, name, url, camera_group FROM cameras")
+            c.execute("SELECT id, name, url, camera_group, COALESCE(floor, '') FROM cameras")
             return c.fetchall()
 
 
-def insert_camera(camera_id, camera_name, camera_url, camera_group):
+def insert_camera(camera_id, camera_name, camera_url, camera_group, camera_floor=""):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
             c.execute(
-                "INSERT INTO cameras (id, name, url, camera_group) VALUES (?, ?, ?, ?)",
-                (camera_id, camera_name, camera_url, camera_group),
+                "INSERT INTO cameras (id, name, url, camera_group, floor) VALUES (?, ?, ?, ?, ?)",
+                (camera_id, camera_name, camera_url, camera_group, camera_floor),
             )
             conn.commit()
 
@@ -108,17 +119,20 @@ def delete_camera(camera_id):
             conn.commit()
 
 
-def update_camera(camera_id, clean_name, new_zone=None):
+def update_camera(camera_id, clean_name, new_zone=None, new_floor=None):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
-            if new_zone:
+            if new_zone is not None:
                 c.execute(
-                    "UPDATE cameras SET name = ?, camera_group = ? WHERE id = ?",
-                    (clean_name, new_zone, camera_id),
+                    "UPDATE cameras SET name = ?, camera_group = ?, floor = ? WHERE id = ?",
+                    (clean_name, new_zone, new_floor or "", camera_id),
                 )
             else:
-                c.execute("UPDATE cameras SET name = ? WHERE id = ?", (clean_name, camera_id))
+                c.execute(
+                    "UPDATE cameras SET name = ?, floor = ? WHERE id = ?",
+                    (clean_name, new_floor or "", camera_id),
+                )
             conn.commit()
 
 
@@ -145,15 +159,15 @@ def fetch_history():
     return campus_data, zone_data
 
 
-def insert_anomaly(camera_id, camera_name, zone_name, message):
+def insert_anomaly(camera_id, camera_name, zone_name, detected_count, message):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
             c.execute(
                 """INSERT INTO anomaly_logs
-                   (camera_id, camera_name, zone_name, message, is_resolved)
-                   VALUES (?, ?, ?, ?, 0)""",
-                (camera_id, camera_name, zone_name, message),
+                   (camera_id, camera_name, zone_name, detected_count, message, is_resolved)
+                   VALUES (?, ?, ?, ?, ?, 0)""",
+                (camera_id, camera_name, zone_name, detected_count, message),
             )
             conn.commit()
 
@@ -164,7 +178,7 @@ def fetch_active_anomalies():
             c = conn.cursor()
             c.execute(
                 """
-                SELECT id, camera_id, camera_name, zone_name, message, detected_at
+                SELECT id, camera_id, camera_name, zone_name, detected_count, message, detected_at
                 FROM anomaly_logs
                 WHERE is_resolved = 0
                 ORDER BY id DESC
@@ -195,7 +209,7 @@ def fetch_anomaly_history(limit=100):
             c = conn.cursor()
             c.execute(
                 """
-                SELECT id, camera_id, camera_name, zone_name, message, is_resolved, detected_at
+                SELECT id, camera_id, camera_name, zone_name, detected_count, message, is_resolved, detected_at
                 FROM anomaly_logs
                 ORDER BY id DESC
                 LIMIT ?
@@ -211,7 +225,7 @@ def fetch_recent_unresolved_anomalies(window_seconds):
             c = conn.cursor()
             c.execute(
                 """
-                SELECT id, camera_id, camera_name, zone_name, message, detected_at
+                SELECT id, camera_id, camera_name, zone_name, detected_count, message, detected_at
                 FROM anomaly_logs
                 WHERE is_resolved = 0
                   AND detected_at >= datetime('now', ?)

@@ -38,7 +38,7 @@ class CameraRegistry:
                 return True
             return False
 
-    def update_camera(self, camera_id, *, name=None, group=None):
+    def update_camera(self, camera_id, *, name=None, group=None, floor=None):
         with self._lock:
             if camera_id not in self._cameras:
                 return False
@@ -46,6 +46,8 @@ class CameraRegistry:
                 self._cameras[camera_id]["name"] = name
             if group is not None:
                 self._cameras[camera_id]["group"] = group
+            if floor is not None:
+                self._cameras[camera_id]["floor"] = floor
             return True
 
     def move_group_to_unassigned(self, zone_name):

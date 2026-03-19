@@ -177,13 +177,17 @@ def camera_worker(camera_registry, camera_id, source):
                     thickness=2,
                 )
 
-            if person_count > 0:
-                check_and_fire_anomaly(
-                    camera_id,
-                    cam_info.get("name", camera_id),
-                    cam_info.get("group", ""),
-                    person_count,
-                )
+            check_and_fire_anomaly(
+                camera_id,
+                cam_info.get("name", camera_id),
+                cam_info.get("group", ""),
+                person_count,
+            )
+
+            print(
+                f"[COUNT] Camera: {cam_info.get('name', camera_id)} | "
+                f"Zone: {cam_info.get('group', '')} | Count: {person_count}"
+            )
 
             camera_registry.update_detection(camera_id, person_count, time.time())
 
@@ -213,19 +217,20 @@ def stop_camera_thread(camera_id):
 
 def load_cameras_from_db(camera_registry):
     rows = fetch_cameras()
-    for cam_id, name, url, group in rows:
+    for cam_id, name, url, group, floor in rows:
         camera_registry.add(
             cam_id,
             {
                 "name": name,
                 "url": url,
                 "group": group,
+                "floor": floor or "",
                 "count": 0,
                 "is_active": False,
                 "last_updated": time.time(),
             },
         )
-    for cam_id, _, url, _ in rows:
+    for cam_id, _, url, _, _ in rows:
         start_camera_thread(camera_registry, cam_id, url)
     print(f"Loaded {len(rows)} cameras.")
 

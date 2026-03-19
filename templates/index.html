@@ -15,6 +15,7 @@
         <span class="close-modal">&times;</span>
         <img id="modalImg" class="modal-content" src="">
         <h2 id="modalTitle" style="color: white; margin-top: 15px;">Camera Feed</h2>
+        <p id="modalCount" style="color: #03dac6; margin-top: 8px; font-weight: bold;"></p>
     </div>
     <div id="chartModal" class="modal" onclick="closeChartModal(event)">
         <span class="close-modal" onclick="closeChartModal(event)">&times;</span>
@@ -39,6 +40,12 @@
                     {% for zone in all_zones %}
                         <option value="{{ zone }}">{{ zone }}</option>
                     {% endfor %}
+                </select>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="color: #888; font-size: 0.85rem; display: block; margin-bottom: 8px;">Floor Classification</label>
+                <select id="editCamFloorInput" style="width: 100%; padding: 12px; background: #000; border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box; font-family: inherit; font-size: 1rem;">
                 </select>
             </div>
             
@@ -237,10 +244,11 @@
 
                 <div class="grid-container" id="video-grid">
                     {% for cam_id, info in cameras.items() %}
-                    <div class="video-card cam-card" id="cam-card-{{ cam_id }}" data-group="{{ info.group }}">
+                    <div class="video-card cam-card" id="cam-card-{{ cam_id }}" data-group="{{ info.group }}" data-floor="{{ info.floor or '' }}">
                         <div class="video-header" style="align-items: flex-start;">
                             <div style="display: flex; flex-direction: column; gap: 4px; margin-left: 8px;">
                                 <span id="name-live-{{ cam_id }}" style="font-weight:bold; font-size: 1.05rem;">{{ info.name }}</span>
+                                <span id="floor-live-{{ cam_id }}" class="floor-badge{% if not info.floor %} hidden{% endif %}">{{ info.floor }}</span>
                                 <span id="timer-live-{{ cam_id }}" style="color: #cf6679; font-size: 0.8rem; font-weight: bold; display: none;"></span>
                             </div>
                             
@@ -258,9 +266,9 @@
                         </div>
                         
                         {% if loop.index > 6 %}
-                            <img class="feed cam-feed" data-src="http://127.0.0.1:5000/video_feed/{{ cam_id }}" src="" onclick="openModal(this, '{{ info.name }}')">
+                            <img class="feed cam-feed" data-src="http://127.0.0.1:5000/video_feed/{{ cam_id }}" src="" onclick="openModal(this, '{{ info.name }}', '{{ cam_id }}')">
                         {% else %}
-                            <img class="feed cam-feed" data-src="http://localhost:5000/video_feed/{{ cam_id }}" src="" onclick="openModal(this, '{{ info.name }}')">
+                            <img class="feed cam-feed" data-src="http://localhost:5000/video_feed/{{ cam_id }}" src="" onclick="openModal(this, '{{ info.name }}', '{{ cam_id }}')">
                         {% endif %}
                     </div>
                     {% endfor %}
@@ -290,10 +298,44 @@
     <!-- Toast container -->
     <div id="toast-container"></div>
 
+    <script id="floor-options-data" type="application/json">{{ floor_options_by_zone | tojson }}</script>
 
     <script>
         // --- 0. FULL SCREEN MODAL LOGIC ---
+        const floorOptionsByZone = JSON.parse(document.getElementById('floor-options-data').textContent);
         let activeModalCamId = null;
+
+        function populateFloorOptions(zoneName, selectedFloor = '') {
+            const floorSelect = document.getElementById('editCamFloorInput');
+            if (!floorSelect) return;
+
+            const zoneOptions = floorOptionsByZone[zoneName] || [''];
+            floorSelect.innerHTML = '';
+
+            zoneOptions.forEach(floor => {
+                const option = document.createElement('option');
+                option.value = floor;
+                option.textContent = floor || 'No Floor Classification';
+                floorSelect.appendChild(option);
+            });
+
+            if (!zoneOptions.includes(selectedFloor) && selectedFloor) {
+                floorSelect.appendChild(new Option(`${selectedFloor} (Existing)`, selectedFloor));
+            }
+
+            floorSelect.value = selectedFloor;
+        }
+
+        function setFloorBadge(camId, floorText) {
+            const badge = document.getElementById(`floor-live-${camId}`);
+            const card = document.getElementById(`cam-card-${camId}`);
+            if (!badge || !card) return;
+
+            const cleanFloor = (floorText || '').trim();
+            card.setAttribute('data-floor', cleanFloor);
+            badge.innerText = cleanFloor;
+            badge.classList.toggle('hidden', cleanFloor === '');
+        }
 
         function openModal(imgElement, camName, camId) {
             if (!imgElement.src || imgElement.src.endsWith(window.location.host + '/')) return;
@@ -302,7 +344,8 @@
             document.getElementById("modalImg").src = imgElement.src;
             document.getElementById("modalTitle").innerText = camName + " (Live)";
             const currentBadge = document.getElementById(`count-live-${camId}`);
-            if (currentBadge) {
+            const modalCount = document.getElementById("modalCount");
+            if (currentBadge && modalCount) {
                 document.getElementById("modalCount").innerText = currentBadge.innerText;
             }
             modal.classList.add("show");
@@ -469,9 +512,12 @@
 
                 for (const [camId, info] of Object.entries(data)) {
                     const badge     = document.getElementById(`count-live-${camId}`);
+                    const nameSpan  = document.getElementById(`name-live-${camId}`);
                     const timerSpan = document.getElementById(`timer-live-${camId}`);
 
                     if (badge) badge.innerText = `People: ${info.count}`;
+                    if (nameSpan) nameSpan.innerText = info.name;
+                    setFloorBadge(camId, info.floor);
 
                     if (timerSpan) {
                         if (!info.is_active) {
@@ -722,9 +768,10 @@
                     item.className   = 'notif-item';
                     item.id          = `notif-item-${alert.id}`;
                     item.innerHTML   = `
-                        <div class="notif-item-msg">🚨 ${alert.message}</div>
-                        <div class="notif-item-meta">📷 ${alert.camera_name} &nbsp;|&nbsp; 🏢 ${alert.zone_name}</div>
-                        <div class="notif-item-meta">🕐 ${alert.detected_at}</div>
+                        <div class="notif-item-msg">${alert.message}</div>
+                        <div class="notif-item-meta">${alert.camera_name} &nbsp;|&nbsp;${alert.zone_name}</div>
+                        <div class="notif-item-meta">Count Recorded: ${alert.detected_count ?? 'N/A'}</div>
+                        <div class="notif-item-meta">${alert.detected_at}</div>
                         <button class="notif-item-dismiss" onclick="dismissAlert(${alert.id})">Dismiss</button>
                     `;
                     list.appendChild(item);
@@ -764,13 +811,13 @@
             }
         }
 
-        function showToast(message, cameraName, zoneName) {
+        function showToast(message, cameraName, zoneName, detectedCount) {
             const container = document.getElementById('toast-container');
             const toast     = document.createElement('div');
             toast.className = 'toast';
             toast.innerHTML = `
-                <div class="toast-title">🚨 ${message}</div>
-                <div class="toast-sub">📷 ${cameraName} &nbsp;·&nbsp; 🏢 ${zoneName}</div>
+                <div class="toast-title">${message}</div>
+                <div class="toast-sub">📷 ${cameraName} &nbsp;·&nbsp;${zoneName} &nbsp;·&nbsp; Count: ${detectedCount ?? 'N/A'}</div>
             `;
             container.appendChild(toast);
             setTimeout(() => toast.remove(), 5000);
@@ -801,7 +848,7 @@
                         knownAlertIds.add(alert.id);
                         const detectedMs = new Date(alert.detected_at).getTime();
                         if (Date.now() - detectedMs < 10000) {
-                            showToast(alert.message, alert.camera_name, alert.zone_name);
+                            showToast(alert.message, alert.camera_name, alert.zone_name, alert.detected_count);
                         }
                     }
                 });
@@ -817,8 +864,8 @@
             } catch(e) {}
         })();
 
-        setInterval(pollUnreadCount,  5000);
-        setInterval(pollForNewAlerts, 5000);
+        setInterval(pollUnreadCount,  1000);
+        setInterval(pollForNewAlerts, 1000);
         setInterval(() => { if (panelIsOpen) fetchAndRenderAlerts(); }, 10000);
 
         // --- 10. RENAME CAMERA LOGIC ---
@@ -830,9 +877,11 @@
             activeSettingsCamId = camId;
             const currentName = document.getElementById(`name-live-${camId}`).innerText;
             const currentZone = document.getElementById(`cam-card-${camId}`).getAttribute('data-group');
+            const currentFloor = document.getElementById(`cam-card-${camId}`).getAttribute('data-floor') || '';
             
             document.getElementById('editCamNameInput').value = currentName;
             document.getElementById('editCamZoneInput').value = currentZone;
+            populateFloorOptions(currentZone, currentFloor);
             
             document.getElementById('camSettingsModal').classList.add('show');
             setTimeout(() => document.getElementById('editCamNameInput').focus(), 100);
@@ -844,23 +893,31 @@
             activeSettingsCamId = null;
         }
 
+        document.getElementById('editCamZoneInput').addEventListener('change', (event) => {
+            const selectedZone = event.target.value;
+            populateFloorOptions(selectedZone, '');
+        });
+
         async function saveCamSettings() {
             if (!activeSettingsCamId) return;
             
             const newName = document.getElementById('editCamNameInput').value.trim();
             const newZone = document.getElementById('editCamZoneInput').value;
+            const newFloor = document.getElementById('editCamFloorInput').value.trim();
             
             const nameSpan = document.getElementById(`name-live-${activeSettingsCamId}`);
             const currentName = nameSpan.innerText;
-            const currentZone = document.getElementById(`cam-card-${activeSettingsCamId}`).getAttribute('data-group');
+            const card = document.getElementById(`cam-card-${activeSettingsCamId}`);
+            const currentZone = card.getAttribute('data-group');
+            const currentFloor = card.getAttribute('data-floor') || '';
             
             // If they actually changed something
-            if (newName !== "" && (newName !== currentName || newZone !== currentZone)) {
+            if (newName !== "" && (newName !== currentName || newZone !== currentZone || newFloor !== currentFloor)) {
                 try {
                     const res = await fetch(`/api/update_camera/${activeSettingsCamId}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ new_name: newName, new_zone: newZone })
+                        body: JSON.stringify({ new_name: newName, new_zone: newZone, new_floor: newFloor })
                     });
                     
                     const data = await res.json();
@@ -872,6 +929,8 @@
                         } else {
                             // If they just renamed it, update text seamlessly
                             nameSpan.innerText = data.new_name;
+                            card.setAttribute('data-group', data.new_zone);
+                            setFloorBadge(activeSettingsCamId, data.new_floor);
                             showToast(`Camera settings saved`, data.new_name, data.new_zone);
                             document.getElementById('camSettingsModal').classList.remove('show');
                             activeSettingsCamId = null;
