@@ -120,11 +120,13 @@
                     <form action="/add_camera" method="POST">
                         <input type="text" name="camera_name" placeholder="Location Name" required>
                         <input type="text" name="camera_url" placeholder="RTSP Link or '0'" required>
-                        <select name="camera_group">
+                        <select name="camera_group" id="addCamZoneSelect" onchange="updateAddCamFloorOptions()">
                             {% for zone in all_zones %}
                                 <option value="{{ zone }}">{{ zone }}</option>
                             {% endfor %}
-                            
+                        </select>
+                        <select name="camera_floor" id="addCamFloorSelect">
+                            <option value="">Floor</option>
                         </select>
                         <button type="submit" class="action-btn">Add Stream</button>
                     </form>
@@ -324,6 +326,23 @@
             }
 
             floorSelect.value = selectedFloor;
+        }
+
+        function updateAddCamFloorOptions() {
+            const zoneSelect = document.getElementById('addCamZoneSelect');
+            const floorSelect = document.getElementById('addCamFloorSelect');
+            if (!zoneSelect || !floorSelect) return;
+
+            const selectedZone = zoneSelect.value;
+            const zoneOptions = floorOptionsByZone[selectedZone] || [''];
+            floorSelect.innerHTML = '';
+
+            zoneOptions.forEach(floor => {
+                const option = document.createElement('option');
+                option.value = floor;
+                option.textContent = floor || 'No Floor Classification';
+                floorSelect.appendChild(option);
+            });
         }
 
         function setFloorBadge(camId, floorText) {
@@ -725,7 +744,10 @@
             document.getElementById('chartModal').classList.remove('show');
         }
 
-        window.onload = () => { switchView('dashboard'); };
+        window.onload = () => { 
+            switchView('dashboard');
+            updateAddCamFloorOptions();
+        };
 
         // ══════════════════════════════════════════════
         //  ANOMALY NOTIFICATION SYSTEM
