@@ -60,6 +60,16 @@ def init_db():
             )
             c.execute("""CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)""")
             c.execute(
+                """CREATE TABLE IF NOT EXISTS camera_rois
+                   (
+                        camera_id TEXT PRIMARY KEY,
+                        reference_image_path TEXT,
+                        roi_points TEXT,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
+                   )"""
+            )
+            c.execute(
                 """CREATE TABLE IF NOT EXISTS gate_configs
                    (
                         camera_id TEXT PRIMARY KEY,
@@ -87,6 +97,21 @@ def init_db():
             gate_config_columns = {row[1] for row in c.fetchall()}
             if "separator_points" not in gate_config_columns:
                 c.execute("ALTER TABLE gate_configs ADD COLUMN separator_points TEXT")
+
+            c.execute(
+                """
+                INSERT INTO camera_rois (camera_id, reference_image_path, roi_points, updated_at)
+                SELECT gc.camera_id, gc.reference_image_path, gc.roi_points, gc.updated_at
+                FROM gate_configs gc
+                WHERE gc.roi_points IS NOT NULL
+                  AND gc.roi_points != ''
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM camera_rois cr
+                      WHERE cr.camera_id = gc.camera_id
+                  )
+                """
+            )
 
             c.execute("SELECT count(*) FROM zones")
             if c.fetchone()[0] == 0:
@@ -155,6 +180,52 @@ def fetch_gate_configs():
     return configs
 
 
+def fetch_camera_rois():
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT camera_id, reference_image_path, roi_points
+                FROM camera_rois
+                """
+            )
+            rows = c.fetchall()
+
+    rois = {}
+    for camera_id, image_path, roi_points in rows:
+        rois[camera_id] = {
+            "camera_id": camera_id,
+            "reference_image_path": image_path or "",
+            "roi_points": json.loads(roi_points) if roi_points else [],
+        }
+    return rois
+
+
+def fetch_camera_roi(camera_id):
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT camera_id, reference_image_path, roi_points
+                FROM camera_rois
+                WHERE camera_id = ?
+                """,
+                (camera_id,),
+            )
+            row = c.fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "camera_id": row[0],
+        "reference_image_path": row[1] or "",
+        "roi_points": json.loads(row[2]) if row[2] else [],
+    }
+
+
 def fetch_gate_config(camera_id):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
@@ -202,6 +273,33 @@ def upsert_gate_config(camera_id, reference_image_path, roi_points, split_x, sep
                 """,
                 (camera_id, reference_image_path, roi_points_json, split_x, separator_points_json, direction, _ph_now_str()),
             )
+            conn.commit()
+
+
+def upsert_camera_roi(camera_id, reference_image_path, roi_points):
+    roi_points_json = json.dumps(roi_points or [])
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                INSERT INTO camera_rois (camera_id, reference_image_path, roi_points, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(camera_id) DO UPDATE SET
+                    reference_image_path = excluded.reference_image_path,
+                    roi_points = excluded.roi_points,
+                    updated_at = excluded.updated_at
+                """,
+                (camera_id, reference_image_path, roi_points_json, _ph_now_str()),
+            )
+            conn.commit()
+
+
+def delete_camera_roi(camera_id):
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM camera_rois WHERE camera_id = ?", (camera_id,))
             conn.commit()
 
 

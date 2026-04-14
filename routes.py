@@ -18,18 +18,21 @@ from config import (
 )
 from database import (
     add_zone,
+    delete_camera_roi,
     delete_camera,
     delete_gate_config,
     dismiss_all_anomalies,
     dismiss_anomaly,
     fetch_active_anomalies,
     fetch_anomaly_history,
+    fetch_camera_roi,
     fetch_gate_config,
     fetch_history,
     fetch_recent_unresolved_anomalies,
     fetch_zones,
     insert_camera,
     remove_zone,
+    upsert_camera_roi,
     upsert_gate_config,
     update_camera,
 )
@@ -46,13 +49,14 @@ def _camera_floor_lookup(camera_registry):
     }
 
 
-def _serialize_gate_config(config):
+def _serialize_gate_config(config, roi_config=None):
     if not config:
         return {
             "is_gate_camera": False,
-            "reference_image_path": "",
-            "roi_points": [],
+            "reference_image_path": roi_config.get("reference_image_path", "") if roi_config else "",
+            "roi_points": roi_config.get("roi_points", []) if roi_config else [],
             "split_x": None,
+            "separator_points": [],
             "direction": "left_to_right_entry",
         }
 
@@ -65,8 +69,8 @@ def _serialize_gate_config(config):
 
     return {
         "is_gate_camera": True,
-        "reference_image_path": config.get("reference_image_path", ""),
-        "roi_points": config.get("roi_points", []),
+        "reference_image_path": roi_config.get("reference_image_path", config.get("reference_image_path", "")) if roi_config else config.get("reference_image_path", ""),
+        "roi_points": roi_config.get("roi_points", config.get("roi_points", [])) if roi_config else config.get("roi_points", []),
         "split_x": config.get("split_x"),
         "separator_points": separator_points,
         "direction": config.get("direction") or "left_to_right_entry",
@@ -177,7 +181,8 @@ def register_routes(app, camera_registry):
                 "is_gate_camera": False,
                 "gate_direction": "",
                 "gate_split_x": None,
-                "gate_roi_points": [],
+                "roi_points": [],
+                "reference_image_path": "",
                 "gate_reference_image_path": "",
                 "entry_count": 0,
                 "exit_count": 0,
@@ -232,7 +237,9 @@ def register_routes(app, camera_registry):
     def get_gate_config_route(camera_id):
         if not camera_registry.has(camera_id):
             return jsonify({"status": "error", "message": "Camera not found"}), 404
-        return jsonify({"status": "success", "config": _serialize_gate_config(fetch_gate_config(camera_id))})
+        gate_config = fetch_gate_config(camera_id)
+        roi_config = fetch_camera_roi(camera_id)
+        return jsonify({"status": "success", "config": _serialize_gate_config(gate_config, roi_config)})
 
     @app.route("/api/gate_config/<camera_id>", methods=["POST"])
     def save_gate_config_route(camera_id):
@@ -243,7 +250,9 @@ def register_routes(app, camera_registry):
         separator_points_raw = request.form.get("separator_points", "[]")
         split_x_raw = request.form.get("split_x", "").strip()
         direction = (request.form.get("direction") or "").strip()
+        is_gate_camera = (request.form.get("is_gate_camera") or "").lower() == "true"
         existing_config = fetch_gate_config(camera_id)
+        existing_roi = fetch_camera_roi(camera_id)
 
         try:
             import json
@@ -254,9 +263,6 @@ def register_routes(app, camera_registry):
 
         if not isinstance(roi_points, list) or len(roi_points) < 3:
             return jsonify({"status": "error", "message": "Please plot at least 3 ROI points."}), 400
-        if not isinstance(separator_points, list) or len(separator_points) != 2:
-            return jsonify({"status": "error", "message": "Please plot exactly 2 separator points."}), 400
-
         normalized_roi_points = []
         for point in roi_points:
             if not isinstance(point, dict):
@@ -269,21 +275,27 @@ def register_routes(app, camera_registry):
             normalized_roi_points.append({"x": x, "y": y})
 
         normalized_separator_points = []
-        for point in separator_points:
-            if not isinstance(point, dict):
-                return jsonify({"status": "error", "message": "Separator points must be objects."}), 400
-            try:
-                x = int(point["x"])
-                y = int(point["y"])
-            except Exception:
-                return jsonify({"status": "error", "message": "Separator point coordinates are invalid."}), 400
-            normalized_separator_points.append({"x": x, "y": y})
+        if is_gate_camera:
+            if not isinstance(separator_points, list) or len(separator_points) != 2:
+                return jsonify({"status": "error", "message": "Please plot exactly 2 separator points."}), 400
 
-        if direction not in {"left_to_right_entry", "right_to_left_entry"}:
-            return jsonify({"status": "error", "message": "Direction is invalid."}), 400
+            for point in separator_points:
+                if not isinstance(point, dict):
+                    return jsonify({"status": "error", "message": "Separator points must be objects."}), 400
+                try:
+                    x = int(point["x"])
+                    y = int(point["y"])
+                except Exception:
+                    return jsonify({"status": "error", "message": "Separator point coordinates are invalid."}), 400
+                normalized_separator_points.append({"x": x, "y": y})
+
+            if direction not in {"left_to_right_entry", "right_to_left_entry"}:
+                return jsonify({"status": "error", "message": "Direction is invalid."}), 400
+        else:
+            direction = ""
 
         split_x = None
-        if split_x_raw:
+        if is_gate_camera and split_x_raw:
             try:
                 split_x = int(split_x_raw)
             except ValueError:
@@ -291,7 +303,11 @@ def register_routes(app, camera_registry):
             if split_x < 0 or split_x > CLICKED_RESOLUTION[0]:
                 return jsonify({"status": "error", "message": "Separator is outside the image width."}), 400
 
-        reference_image_path = existing_config.get("reference_image_path", "") if existing_config else ""
+        reference_image_path = ""
+        if existing_roi:
+            reference_image_path = existing_roi.get("reference_image_path", "")
+        elif existing_config:
+            reference_image_path = existing_config.get("reference_image_path", "")
         uploaded_image = request.files.get("reference_image")
         if uploaded_image and uploaded_image.filename:
             if not _allowed_gate_image(uploaded_image.filename):
@@ -307,25 +323,59 @@ def register_routes(app, camera_registry):
         if not reference_image_path:
             return jsonify({"status": "error", "message": "Please upload a CCTV reference image first."}), 400
 
-        gate_config = {
-            "reference_image_path": reference_image_path,
-            "roi_points": normalized_roi_points,
-            "split_x": split_x,
-            "separator_points": normalized_separator_points,
-            "direction": direction,
-        }
-
-        upsert_gate_config(
+        upsert_camera_roi(
             camera_id,
             reference_image_path,
             normalized_roi_points,
-            split_x,
-            normalized_separator_points,
-            direction,
         )
-        camera_registry.set_gate_config(camera_id, gate_config)
+
+        camera_registry.set_gate_config(
+            camera_id,
+            {
+                "reference_image_path": reference_image_path,
+                "roi_points": normalized_roi_points,
+                "split_x": split_x,
+                "separator_points": normalized_separator_points,
+                "direction": direction,
+            } if is_gate_camera else None,
+        )
+        current_info = camera_registry.get(camera_id)
+        if current_info:
+            camera_registry.add(
+                camera_id,
+                {
+                    **current_info,
+                    "roi_points": normalized_roi_points,
+                    "reference_image_path": reference_image_path,
+                },
+            )
+
+        if is_gate_camera:
+            gate_config = {
+                "reference_image_path": reference_image_path,
+                "roi_points": normalized_roi_points,
+                "split_x": split_x,
+                "separator_points": normalized_separator_points,
+                "direction": direction,
+            }
+            upsert_gate_config(
+                camera_id,
+                reference_image_path,
+                normalized_roi_points,
+                split_x,
+                normalized_separator_points,
+                direction,
+            )
+        else:
+            gate_config = None
+            delete_gate_config(camera_id)
+
         camera_registry.reset_gate_totals(camera_id)
-        return jsonify({"status": "success", "config": _serialize_gate_config(gate_config)})
+        serialized_config = _serialize_gate_config(
+            {"camera_id": camera_id, **(gate_config or {})} if gate_config else None,
+            {"camera_id": camera_id, "reference_image_path": reference_image_path, "roi_points": normalized_roi_points},
+        )
+        return jsonify({"status": "success", "config": serialized_config})
 
     @app.route("/api/gate_config/<camera_id>/reset", methods=["POST"])
     def reset_gate_config_route(camera_id):
@@ -333,8 +383,19 @@ def register_routes(app, camera_registry):
             return jsonify({"status": "error", "message": "Camera not found"}), 404
 
         delete_gate_config(camera_id)
+        delete_camera_roi(camera_id)
         camera_registry.set_gate_config(camera_id, None)
         camera_registry.reset_gate_totals(camera_id)
+        current_info = camera_registry.get(camera_id)
+        if current_info:
+            camera_registry.add(
+                camera_id,
+                {
+                    **current_info,
+                    "roi_points": [],
+                    "reference_image_path": "",
+                },
+            )
         return jsonify({"status": "success"})
 
     @app.route("/api/stats")

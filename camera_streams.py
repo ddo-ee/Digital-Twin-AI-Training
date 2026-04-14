@@ -24,7 +24,7 @@ from config import (
     STREAM_FRAME_DELAY_SECONDS,
     WORKER_LOOP_DELAY_SECONDS,
 )
-from database import fetch_cameras, fetch_gate_configs, insert_analytics
+from database import fetch_camera_rois, fetch_cameras, fetch_gate_configs, insert_analytics
 
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = OPENCV_FFMPEG_CAPTURE_OPTIONS
@@ -67,14 +67,15 @@ def _scale_poly_points(raw_points):
     return (np.array(normalized_points, np.float32) * [scale_w, scale_h]).astype(np.int32)
 
 
-def _build_gate_camera_defaults(gate_config=None):
+def _build_gate_camera_defaults(gate_config=None, camera_roi=None):
     is_gate_camera = bool(gate_config)
     return {
+        "roi_points": (camera_roi or {}).get("roi_points", []),
+        "reference_image_path": (camera_roi or {}).get("reference_image_path", ""),
         "is_gate_camera": is_gate_camera,
         "gate_direction": gate_config.get("direction", "") if is_gate_camera else "",
         "gate_split_x": gate_config.get("split_x") if is_gate_camera else None,
         "gate_separator_points": gate_config.get("separator_points", []) if is_gate_camera else [],
-        "gate_roi_points": gate_config.get("roi_points", []) if is_gate_camera else [],
         "gate_reference_image_path": gate_config.get("reference_image_path", "") if is_gate_camera else "",
         "entry_count": 0,
         "exit_count": 0,
@@ -218,8 +219,8 @@ def camera_worker(camera_registry, camera_id, source):
 
     while thread_run_flags.get(camera_id, False):
         cam_info = camera_registry.get(camera_id) or {}
-        gate_roi_points = cam_info.get("gate_roi_points") or []
-        scaled_poly = _scale_poly_points(gate_roi_points) if gate_roi_points else None
+        roi_points = cam_info.get("roi_points") or []
+        scaled_poly = _scale_poly_points(roi_points) if roi_points else None
         if scaled_poly is None and fallback_raw_poly is not None:
             scaled_poly = _scale_poly_points(fallback_raw_poly.tolist())
 
@@ -399,9 +400,10 @@ def stop_camera_thread(camera_id):
 
 def load_cameras_from_db(camera_registry):
     rows = fetch_cameras()
+    camera_rois = fetch_camera_rois()
     gate_configs = fetch_gate_configs()
     for cam_id, name, url, group, floor in rows:
-        gate_defaults = _build_gate_camera_defaults(gate_configs.get(cam_id))
+        gate_defaults = _build_gate_camera_defaults(gate_configs.get(cam_id), camera_rois.get(cam_id))
         camera_registry.add(
             cam_id,
             {
