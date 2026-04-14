@@ -13,6 +13,7 @@ from config import (
     CAMERA_RETRY_DELAY_SECONDS,
     CLICKED_RESOLUTION,
     DETECTION_FRAME_SKIP,
+    GATE_MATCH_DISTANCE_PX,
     MODEL_CONFIDENCE,
     MODEL_IMAGE_SIZE,
     MODEL_PATH,
@@ -23,7 +24,7 @@ from config import (
     STREAM_FRAME_DELAY_SECONDS,
     WORKER_LOOP_DELAY_SECONDS,
 )
-from database import fetch_cameras, insert_analytics
+from database import fetch_cameras, fetch_gate_configs, insert_analytics
 
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = OPENCV_FFMPEG_CAPTURE_OPTIONS
@@ -34,6 +35,7 @@ model_lock = Lock()
 camera_threads = {}
 thread_run_flags = {}
 global_frame_buffer = {}
+gate_camera_runtime = {}
 
 
 def load_poly_from_txt(filename):
@@ -46,6 +48,137 @@ def load_poly_from_txt(filename):
                 x, y = line.strip().split(",")
                 pts.append([int(x), int(y)])
     return np.array(pts, np.float32)
+
+
+def _scale_poly_points(raw_points):
+    if not raw_points:
+        return None
+
+    normalized_points = []
+    for point in raw_points:
+        if isinstance(point, dict):
+            normalized_points.append([int(point["x"]), int(point["y"])])
+        else:
+            normalized_points.append([int(point[0]), int(point[1])])
+
+    clicked_res_w, clicked_res_h = CLICKED_RESOLUTION
+    scale_w = PROCESSING_RESOLUTION[0] / clicked_res_w
+    scale_h = PROCESSING_RESOLUTION[1] / clicked_res_h
+    return (np.array(normalized_points, np.float32) * [scale_w, scale_h]).astype(np.int32)
+
+
+def _build_gate_camera_defaults(gate_config=None):
+    is_gate_camera = bool(gate_config)
+    return {
+        "is_gate_camera": is_gate_camera,
+        "gate_direction": gate_config.get("direction", "") if is_gate_camera else "",
+        "gate_split_x": gate_config.get("split_x") if is_gate_camera else None,
+        "gate_separator_points": gate_config.get("separator_points", []) if is_gate_camera else [],
+        "gate_roi_points": gate_config.get("roi_points", []) if is_gate_camera else [],
+        "gate_reference_image_path": gate_config.get("reference_image_path", "") if is_gate_camera else "",
+        "entry_count": 0,
+        "exit_count": 0,
+    }
+
+
+def _scale_point(point):
+    scale_w = PROCESSING_RESOLUTION[0] / CLICKED_RESOLUTION[0]
+    scale_h = PROCESSING_RESOLUTION[1] / CLICKED_RESOLUTION[1]
+    if isinstance(point, dict):
+        return {
+            "x": int(point["x"] * scale_w),
+            "y": int(point["y"] * scale_h),
+        }
+    return {
+        "x": int(point[0] * scale_w),
+        "y": int(point[1] * scale_h),
+    }
+
+
+def _build_default_separator_points(scaled_poly, configured_split_x=None):
+    min_x = int(np.min(scaled_poly[:, 0]))
+    max_x = int(np.max(scaled_poly[:, 0]))
+    min_y = int(np.min(scaled_poly[:, 1]))
+    max_y = int(np.max(scaled_poly[:, 1]))
+    if configured_split_x is not None:
+        scale_w = PROCESSING_RESOLUTION[0] / CLICKED_RESOLUTION[0]
+        scaled_split_x = configured_split_x * scale_w
+        split_x = int(max(min_x, min(max_x, scaled_split_x)))
+    else:
+        split_x = int((min_x + max_x) / 2)
+    return [
+        {"x": split_x, "y": min_y},
+        {"x": split_x, "y": max_y},
+    ]
+
+
+def _resolve_separator_points(scaled_poly, separator_points=None, configured_split_x=None):
+    if separator_points and len(separator_points) >= 2:
+        return [_scale_point(separator_points[0]), _scale_point(separator_points[1])]
+    return _build_default_separator_points(scaled_poly, configured_split_x)
+
+
+def _resolve_gate_side(point_x, point_y, separator_points):
+    start_point, end_point = separator_points[0], separator_points[1]
+    line_dx = end_point["x"] - start_point["x"]
+    line_dy = end_point["y"] - start_point["y"]
+    point_dx = point_x - start_point["x"]
+    point_dy = point_y - start_point["y"]
+    cross_product = (line_dx * point_dy) - (line_dy * point_dx)
+    return "left" if cross_product < 0 else "right"
+
+
+def _match_gate_points(previous_points, current_point):
+    best_match = None
+    best_distance = None
+
+    for prev_point in previous_points:
+        dx = current_point["x"] - prev_point["x"]
+        dy = current_point["y"] - prev_point["y"]
+        distance = float(np.hypot(dx, dy))
+
+        if distance > GATE_MATCH_DISTANCE_PX:
+            continue
+
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best_match = prev_point
+
+    return best_match
+
+
+def _update_gate_estimate(camera_id, gate_direction, gate_points, now_ts):
+    runtime = gate_camera_runtime.setdefault(
+        camera_id,
+        {
+            "previous_points": [],
+        },
+    )
+
+    entry_increment = 0
+    exit_increment = 0
+
+    for current_point in gate_points:
+        previous_point = _match_gate_points(runtime["previous_points"], current_point)
+        if previous_point is None or previous_point["side"] == current_point["side"]:
+            continue
+
+        moved_left_to_right = previous_point["side"] == "left" and current_point["side"] == "right"
+        moved_right_to_left = previous_point["side"] == "right" and current_point["side"] == "left"
+
+        if gate_direction == "left_to_right_entry":
+            if moved_left_to_right:
+                entry_increment += 1
+            elif moved_right_to_left:
+                exit_increment += 1
+        elif gate_direction == "right_to_left_entry":
+            if moved_right_to_left:
+                entry_increment += 1
+            elif moved_left_to_right:
+                exit_increment += 1
+
+    runtime["previous_points"] = gate_points
+    return entry_increment, exit_increment
 
 
 def analytics_logger(camera_registry):
@@ -81,18 +214,15 @@ def camera_worker(camera_registry, camera_id, source):
     frame_counter = 0
 
     poly_filename = os.path.join("coordinates", f"{camera_id}_coords.txt")
-    raw_clicked_poly = load_poly_from_txt(poly_filename)
-
-    clicked_res_w, clicked_res_h = CLICKED_RESOLUTION
-    scaled_poly = None
-
-    if raw_clicked_poly is not None:
-        scale_w = PROCESSING_RESOLUTION[0] / clicked_res_w
-        scale_h = PROCESSING_RESOLUTION[1] / clicked_res_h
-        scaled_poly = (raw_clicked_poly * [scale_w, scale_h]).astype(np.int32)
+    fallback_raw_poly = load_poly_from_txt(poly_filename)
 
     while thread_run_flags.get(camera_id, False):
         cam_info = camera_registry.get(camera_id) or {}
+        gate_roi_points = cam_info.get("gate_roi_points") or []
+        scaled_poly = _scale_poly_points(gate_roi_points) if gate_roi_points else None
+        if scaled_poly is None and fallback_raw_poly is not None:
+            scaled_poly = _scale_poly_points(fallback_raw_poly.tolist())
+
         if not cam_info.get("is_active", False):
             if cap is not None:
                 cap.release()
@@ -152,6 +282,16 @@ def camera_worker(camera_registry, camera_id, source):
 
             annotated_frame = frame.copy()
             person_count = 0
+            gate_points = []
+            gate_direction = cam_info.get("gate_direction", "")
+            is_gate_camera = cam_info.get("is_gate_camera", False) and scaled_poly is not None
+            gate_separator_points = None
+            if is_gate_camera:
+                gate_separator_points = _resolve_separator_points(
+                    scaled_poly,
+                    cam_info.get("gate_separator_points"),
+                    cam_info.get("gate_split_x"),
+                )
 
             for box in results[0].boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
@@ -164,6 +304,22 @@ def camera_worker(camera_registry, camera_id, source):
                         person_count += 1
                         cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.circle(annotated_frame, (foot_x, foot_y), 5, (0, 0, 255), -1)
+                        if is_gate_camera:
+                            gate_side = _resolve_gate_side(foot_x, foot_y, gate_separator_points)
+                            gate_points.append({
+                                "x": foot_x,
+                                "y": foot_y,
+                                "side": gate_side,
+                            })
+                            cv2.putText(
+                                annotated_frame,
+                                gate_side.upper(),
+                                (x1, max(20, y1 - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.45,
+                                (0, 255, 255),
+                                1,
+                            )
                 else:
                     person_count += 1
                     cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -176,6 +332,37 @@ def camera_worker(camera_registry, camera_id, source):
                     color=(0, 255, 255),
                     thickness=2,
                 )
+
+            if is_gate_camera:
+                cv2.line(
+                    annotated_frame,
+                    (gate_separator_points[0]["x"], gate_separator_points[0]["y"]),
+                    (gate_separator_points[1]["x"], gate_separator_points[1]["y"]),
+                    (255, 180, 0),
+                    2,
+                )
+
+                entry_increment, exit_increment = _update_gate_estimate(
+                    camera_id,
+                    gate_direction,
+                    gate_points,
+                    time.time(),
+                )
+                if entry_increment or exit_increment:
+                    camera_registry.update_gate_totals(camera_id, entry_increment, exit_increment)
+
+                updated_info = camera_registry.get(camera_id) or cam_info
+                cv2.putText(
+                    annotated_frame,
+                    f"IN {updated_info.get('entry_count', 0)} | OUT {updated_info.get('exit_count', 0)}",
+                    (12, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 255),
+                    2,
+                )
+            else:
+                gate_camera_runtime.pop(camera_id, None)
 
             check_and_fire_anomaly(
                 camera_id,
@@ -212,7 +399,9 @@ def stop_camera_thread(camera_id):
 
 def load_cameras_from_db(camera_registry):
     rows = fetch_cameras()
+    gate_configs = fetch_gate_configs()
     for cam_id, name, url, group, floor in rows:
+        gate_defaults = _build_gate_camera_defaults(gate_configs.get(cam_id))
         camera_registry.add(
             cam_id,
             {
@@ -223,6 +412,7 @@ def load_cameras_from_db(camera_registry):
                 "count": 0,
                 "is_active": False,
                 "last_updated": time.time(),
+                **gate_defaults,
             },
         )
     for cam_id, _, url, _, _ in rows:

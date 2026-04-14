@@ -38,6 +38,78 @@ class CameraRegistry:
                 return True
             return False
 
+    def update_gate_totals(self, camera_id, entry_increment=0, exit_increment=0):
+        with self._lock:
+            if camera_id not in self._cameras:
+                return None
+
+            info = self._cameras[camera_id]
+            info["entry_count"] = info.get("entry_count", 0) + entry_increment
+            info["exit_count"] = info.get("exit_count", 0) + exit_increment
+            return {
+                "entry_count": info["entry_count"],
+                "exit_count": info["exit_count"],
+            }
+
+    def set_gate_config(self, camera_id, gate_config):
+        with self._lock:
+            if camera_id not in self._cameras:
+                return False
+
+            info = self._cameras[camera_id]
+            if gate_config:
+                info["is_gate_camera"] = True
+                info["gate_direction"] = gate_config.get("direction", "")
+                info["gate_split_x"] = gate_config.get("split_x")
+                info["gate_separator_points"] = gate_config.get("separator_points", [])
+                info["gate_roi_points"] = gate_config.get("roi_points", [])
+                info["gate_reference_image_path"] = gate_config.get("reference_image_path", "")
+            else:
+                info["is_gate_camera"] = False
+                info["gate_direction"] = ""
+                info["gate_split_x"] = None
+                info["gate_separator_points"] = []
+                info["gate_roi_points"] = []
+                info["gate_reference_image_path"] = ""
+            return True
+
+    def reset_gate_totals(self, camera_id):
+        with self._lock:
+            if camera_id not in self._cameras:
+                return False
+            self._cameras[camera_id]["entry_count"] = 0
+            self._cameras[camera_id]["exit_count"] = 0
+            return True
+
+    def get_gate_summary(self):
+        with self._lock:
+            configured_cameras = []
+            total_entered = 0
+            total_exited = 0
+
+            for cam_id, info in self._cameras.items():
+                if not info.get("is_gate_camera", False):
+                    continue
+
+                entry_count = info.get("entry_count", 0)
+                exit_count = info.get("exit_count", 0)
+                total_entered += entry_count
+                total_exited += exit_count
+                configured_cameras.append({
+                    "id": cam_id,
+                    "name": info.get("name", cam_id),
+                    "direction": info.get("gate_direction", ""),
+                    "entry_count": entry_count,
+                    "exit_count": exit_count,
+                })
+
+            return {
+                "total_entered": total_entered,
+                "total_exited": total_exited,
+                "inside_total": total_entered - total_exited,
+                "cameras": configured_cameras,
+            }
+
     def update_camera(self, camera_id, *, name=None, group=None, floor=None):
         with self._lock:
             if camera_id not in self._cameras:

@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 
@@ -22,6 +23,7 @@ def init_db():
             c = conn.cursor()
             c.execute("PRAGMA journal_mode=WAL;")
             c.execute("PRAGMA synchronous=NORMAL;")
+            c.execute("PRAGMA foreign_keys=ON;")
 
             c.execute(
                 """CREATE TABLE IF NOT EXISTS cameras
@@ -57,6 +59,19 @@ def init_db():
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"""
             )
             c.execute("""CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)""")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS gate_configs
+                   (
+                        camera_id TEXT PRIMARY KEY,
+                        reference_image_path TEXT,
+                        roi_points TEXT,
+                        split_x INTEGER,
+                        separator_points TEXT,
+                        direction TEXT,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
+                   )"""
+            )
 
             c.execute("PRAGMA table_info(cameras)")
             camera_columns = {row[1] for row in c.fetchall()}
@@ -67,6 +82,11 @@ def init_db():
             anomaly_columns = {row[1] for row in c.fetchall()}
             if "detected_count" not in anomaly_columns:
                 c.execute("ALTER TABLE anomaly_logs ADD COLUMN detected_count INTEGER DEFAULT 0")
+
+            c.execute("PRAGMA table_info(gate_configs)")
+            gate_config_columns = {row[1] for row in c.fetchall()}
+            if "separator_points" not in gate_config_columns:
+                c.execute("ALTER TABLE gate_configs ADD COLUMN separator_points TEXT")
 
             c.execute("SELECT count(*) FROM zones")
             if c.fetchone()[0] == 0:
@@ -108,6 +128,89 @@ def fetch_cameras():
             c = conn.cursor()
             c.execute("SELECT id, name, url, camera_group, COALESCE(floor, '') FROM cameras")
             return c.fetchall()
+
+
+def fetch_gate_configs():
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT camera_id, reference_image_path, roi_points, split_x, separator_points, direction
+                FROM gate_configs
+                """
+            )
+            rows = c.fetchall()
+
+    configs = {}
+    for camera_id, image_path, roi_points, split_x, separator_points, direction in rows:
+        configs[camera_id] = {
+            "camera_id": camera_id,
+            "reference_image_path": image_path or "",
+            "roi_points": json.loads(roi_points) if roi_points else [],
+            "split_x": split_x,
+            "separator_points": json.loads(separator_points) if separator_points else [],
+            "direction": direction or "",
+        }
+    return configs
+
+
+def fetch_gate_config(camera_id):
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT camera_id, reference_image_path, roi_points, split_x, separator_points, direction
+                FROM gate_configs
+                WHERE camera_id = ?
+                """,
+                (camera_id,),
+            )
+            row = c.fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "camera_id": row[0],
+        "reference_image_path": row[1] or "",
+        "roi_points": json.loads(row[2]) if row[2] else [],
+        "split_x": row[3],
+        "separator_points": json.loads(row[4]) if row[4] else [],
+        "direction": row[5] or "",
+    }
+
+
+def upsert_gate_config(camera_id, reference_image_path, roi_points, split_x, separator_points, direction):
+    roi_points_json = json.dumps(roi_points or [])
+    separator_points_json = json.dumps(separator_points or [])
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                INSERT INTO gate_configs (camera_id, reference_image_path, roi_points, split_x, separator_points, direction, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(camera_id) DO UPDATE SET
+                    reference_image_path = excluded.reference_image_path,
+                    roi_points = excluded.roi_points,
+                    split_x = excluded.split_x,
+                    separator_points = excluded.separator_points,
+                    direction = excluded.direction,
+                    updated_at = excluded.updated_at
+                """,
+                (camera_id, reference_image_path, roi_points_json, split_x, separator_points_json, direction, _ph_now_str()),
+            )
+            conn.commit()
+
+
+def delete_gate_config(camera_id):
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM gate_configs WHERE camera_id = ?", (camera_id,))
+            conn.commit()
 
 
 def insert_camera(camera_id, camera_name, camera_url, camera_group, camera_floor=""):

@@ -48,6 +48,10 @@
                 <select id="editCamFloorInput" style="width: 100%; padding: 12px; background: #000; border: 1px solid #444; color: white; border-radius: 6px; box-sizing: border-box; font-family: inherit; font-size: 1rem;">
                 </select>
             </div>
+
+            <button onclick="openGateConfigModal()" style="width: 100%; background: #222; border: 1px solid #03dac6; color: #03dac6; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-weight: bold;">
+                <i class="fas fa-draw-polygon"></i> Configure Gate Counter
+            </button>
             
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 30px; border-top: 1px solid #333; padding-top: 20px;">
                 <button onclick="deleteCamFromSettings()" style="background: transparent; border: 1px solid #cf6679; color: #cf6679; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;">
@@ -60,6 +64,66 @@
             </div>
         </div>
     </div>
+    </div>
+    <div id="gateConfigModal" class="modal" onclick="closeGateConfigModal(event)">
+        <span class="close-modal" onclick="closeGateConfigModal(event)">&times;</span>
+        <div class="modal-content gate-config-modal-content" onclick="event.stopPropagation()">
+            <h2 style="color: #03dac6; margin-top: 0; margin-bottom: 10px;"><i class="fas fa-draw-polygon"></i> Gate Counter Setup</h2>
+            <p id="gateConfigCameraName" style="color: #94a3b8; margin-top: 0; margin-bottom: 18px;"></p>
+
+            <div class="gate-config-layout">
+                <div>
+                    <label class="gate-config-label">1. Reference CCTV Image</label>
+                    <input type="file" id="gateReferenceImageInput" accept=".jpg,.jpeg,.png,.webp" style="width: 100%; margin-bottom: 12px;">
+                    <p style="color: #64748b; font-size: 0.82rem; margin-top: 0;">Upload a screenshot or frame from the exact CCTV you want to configure.</p>
+
+                    <label class="gate-config-label">2. Direction</label>
+                    <select id="gateDirectionSelect" class="gate-config-input">
+                        <option value="left_to_right_entry">Left to Right = Entry</option>
+                        <option value="right_to_left_entry">Right to Left = Entry</option>
+                    </select>
+
+                    <label class="gate-config-label" style="margin-top: 16px;">3. Plotting Tools</label>
+                    <div class="gate-tool-row">
+                        <button type="button" class="gate-tool-btn active" id="gateModeRoiBtn" onclick="setGateDrawMode('roi')">ROI Mode</button>
+                        <button type="button" class="gate-tool-btn" id="gateModeSeparatorBtn" onclick="setGateDrawMode('separator')">Separator Mode</button>
+                    </div>
+                    <div class="gate-tool-row">
+                        <button type="button" class="gate-tool-btn" onclick="closeGatePolygon()">Close ROI</button>
+                        <button type="button" class="gate-tool-btn" onclick="clearGateRoi()">Clear ROI</button>
+                        <button type="button" class="gate-tool-btn" onclick="clearGateSeparator()">Clear Separator</button>
+                    </div>
+
+                    <p id="gateConfigStatus" style="color: #94a3b8; font-size: 0.85rem; margin-top: 16px;">
+                        Upload an image, then click to plot the ROI. After that, switch to Separator Mode and click where the divider should be.
+                    </p>
+                </div>
+
+                <div>
+                    <div class="gate-canvas-shell">
+                        <canvas id="gateConfigCanvas" width="{{ clicked_resolution[0] }}" height="{{ clicked_resolution[1] }}"></canvas>
+                    </div>
+                    <div class="gate-coords-row">
+                        <span>Separator Line:</span>
+                        <strong id="gateSeparatorValue">Not set</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; border-top: 1px solid #333; padding-top: 20px;">
+                <button onclick="resetGateConfig()" style="background: transparent; border: 1px solid #cf6679; color: #cf6679; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                    Reset Gate Setup
+                </button>
+                <div style="display: flex; gap: 10px;">
+                    <button onclick="closeGateConfigModal()" style="background: transparent; border: 1px solid #888; color: #888; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                        Cancel
+                    </button>
+                    <button onclick="saveGateConfig()" style="background: #03dac6; border: none; color: black; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+                        Save Gate Setup
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
     <div id="deleteZoneModal" class="modal" onclick="closeDeleteZoneModal(event)">
         <span class="close-modal" onclick="closeDeleteZoneModal(event)">&times;</span>
@@ -306,6 +370,16 @@
         // --- 0. FULL SCREEN MODAL LOGIC ---
         const floorOptionsByZone = JSON.parse(document.getElementById('floor-options-data').textContent);
         let activeModalCamId = null;
+        const clickedResolution = { width: {{ clicked_resolution[0] }}, height: {{ clicked_resolution[1] }} };
+        let activeGateConfigCamId = null;
+        let gateDrawMode = 'roi';
+        let gateReferenceImage = null;
+        let gateReferenceImageChanged = false;
+        let gateReferenceImageObjectUrl = null;
+        let gateHasStoredImage = false;
+        let gateRoiPoints = [];
+        let gatePolygonClosed = false;
+        let gateSeparatorPoints = [];
 
         function populateFloorOptions(zoneName, selectedFloor = '') {
             const floorSelect = document.getElementById('editCamFloorInput');
@@ -519,8 +593,12 @@
         // --- 7. BACKGROUND ANALYTICS POLLING ---
         setInterval(async () => {
             try {
-                const response = await fetch('/api/stats');
-                const data     = await response.json();
+                const [response, gateResponse] = await Promise.all([
+                    fetch('/api/stats'),
+                    fetch('/api/gate_stats')
+                ]);
+                const data = await response.json();
+                const gateStats = await gateResponse.json();
 
                 const groups     = {};
                 const groupActive = {};
@@ -534,7 +612,11 @@
                     const nameSpan  = document.getElementById(`name-live-${camId}`);
                     const timerSpan = document.getElementById(`timer-live-${camId}`);
 
-                    if (badge) badge.innerText = `People: ${info.count}`;
+                    if (badge) {
+                        badge.innerText = info.is_gate_camera
+                            ? `People: ${info.count} | IN: ${info.entry_count} | OUT: ${info.exit_count}`
+                            : `People: ${info.count}`;
+                    }
                     if (nameSpan) nameSpan.innerText = info.name;
                     setFloorBadge(camId, info.floor);
 
@@ -552,7 +634,11 @@
 
                     if (typeof activeModalCamId !== 'undefined' && activeModalCamId === camId) {
                         const modalCount = document.getElementById('modalCount');
-                        if (modalCount) modalCount.innerText = `People: ${info.count}`;
+                        if (modalCount) {
+                            modalCount.innerText = info.is_gate_camera
+                                ? `People: ${info.count} | IN: ${info.entry_count} | OUT: ${info.exit_count}`
+                                : `People: ${info.count}`;
+                        }
                     }
 
                     if (!groups[info.group]) groups[info.group] = { count: 0, last_updated: info.last_updated };
@@ -595,6 +681,27 @@
                                         <i class="fas ${allCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${masterBtnText}
                                     </button>
                                 </div>`;
+
+                    html += `<div class="stat-card" style="border-color: #ffb86c;">
+                                <h3 style="color: #ffb86c;">GATE FLOW ESTIMATE</h3>
+                                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; gap: 12px;">
+                                    <div>
+                                        <p class="stat-value" style="color: #03dac6; margin-bottom: 0;">${gateStats.total_entered}</p>
+                                        <p class="stat-sub" style="margin-top: 0;">Total Entered</p>
+                                    </div>
+                                    <div style="text-align: center; border-left: 1px solid #444; border-right: 1px solid #444; padding: 0 15px;">
+                                        <p class="stat-value" style="color: #cf6679; margin-bottom: 0;">${gateStats.total_exited}</p>
+                                        <p class="stat-sub" style="margin-top: 0;">Total Exited</p>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <p class="stat-value" style="color: #ffb86c; margin-bottom: 0;">${gateStats.inside_total}</p>
+                                        <p class="stat-sub" style="margin-top: 0;">Estimated Inside</p>
+                                    </div>
+                                </div>
+                                <p style="color: #888; font-size: 0.85rem; margin-top: 15px;">
+                                    Gate cameras configured: ${gateStats.cameras.length}
+                                </p>
+                             </div>`;
 
                     for (const [groupName, groupData] of Object.entries(groups)) {
                         let isActive  = groupActive[groupName];
@@ -977,6 +1084,309 @@
             // Add a quick confirmation so they don't accidentally click it
             if (confirm("Are you sure you want to permanently delete this camera stream?")) {
                 window.location.href = `/remove_camera/${activeSettingsCamId}`;
+            }
+        }
+
+        const gateCanvas = document.getElementById('gateConfigCanvas');
+        const gateCanvasCtx = gateCanvas.getContext('2d');
+
+        function resetGateEditorState() {
+            gateReferenceImage = null;
+            gateReferenceImageChanged = false;
+            gateHasStoredImage = false;
+            if (gateReferenceImageObjectUrl) {
+                URL.revokeObjectURL(gateReferenceImageObjectUrl);
+                gateReferenceImageObjectUrl = null;
+            }
+            gateRoiPoints = [];
+            gatePolygonClosed = false;
+            gateSeparatorPoints = [];
+            gateDrawMode = 'roi';
+            document.getElementById('gateReferenceImageInput').value = '';
+            document.getElementById('gateDirectionSelect').value = 'left_to_right_entry';
+            document.getElementById('gateSeparatorValue').innerText = 'Not set';
+            updateGateStatus('Upload an image, then click to plot the ROI. After that, switch to Separator Mode and click 2 points for the divider line.');
+            updateGateModeButtons();
+            redrawGateCanvas();
+        }
+
+        function updateGateStatus(message) {
+            document.getElementById('gateConfigStatus').innerText = message;
+        }
+
+        function updateGateModeButtons() {
+            document.getElementById('gateModeRoiBtn').classList.toggle('active', gateDrawMode === 'roi');
+            document.getElementById('gateModeSeparatorBtn').classList.toggle('active', gateDrawMode === 'separator');
+        }
+
+        function setGateDrawMode(mode) {
+            gateDrawMode = mode;
+            updateGateModeButtons();
+            if (mode === 'roi') {
+                updateGateStatus('ROI Mode: click around the gate area. Use Close ROI when the polygon is complete.');
+            } else {
+                updateGateStatus('Separator Mode: click 2 points to draw the left/right divider line inside the ROI.');
+            }
+        }
+
+        function drawGatePoint(point) {
+            gateCanvasCtx.beginPath();
+            gateCanvasCtx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+            gateCanvasCtx.fillStyle = '#03dac6';
+            gateCanvasCtx.fill();
+            gateCanvasCtx.lineWidth = 2;
+            gateCanvasCtx.strokeStyle = '#03131a';
+            gateCanvasCtx.stroke();
+        }
+
+        function redrawGateCanvas() {
+            gateCanvasCtx.clearRect(0, 0, gateCanvas.width, gateCanvas.height);
+
+            if (gateReferenceImage) {
+                gateCanvasCtx.drawImage(gateReferenceImage, 0, 0, gateCanvas.width, gateCanvas.height);
+            } else {
+                gateCanvasCtx.fillStyle = '#0b1020';
+                gateCanvasCtx.fillRect(0, 0, gateCanvas.width, gateCanvas.height);
+                gateCanvasCtx.fillStyle = '#64748b';
+                gateCanvasCtx.font = '28px Segoe UI';
+                gateCanvasCtx.textAlign = 'center';
+                gateCanvasCtx.fillText('Upload a CCTV reference image to start plotting', gateCanvas.width / 2, gateCanvas.height / 2);
+            }
+
+            if (gateRoiPoints.length > 0) {
+                gateCanvasCtx.beginPath();
+                gateCanvasCtx.moveTo(gateRoiPoints[0].x, gateRoiPoints[0].y);
+                for (let i = 1; i < gateRoiPoints.length; i++) {
+                    gateCanvasCtx.lineTo(gateRoiPoints[i].x, gateRoiPoints[i].y);
+                }
+                if (gatePolygonClosed && gateRoiPoints.length > 2) {
+                    gateCanvasCtx.closePath();
+                    gateCanvasCtx.fillStyle = 'rgba(3, 218, 198, 0.15)';
+                    gateCanvasCtx.fill();
+                }
+                gateCanvasCtx.lineWidth = 3;
+                gateCanvasCtx.strokeStyle = '#03dac6';
+                gateCanvasCtx.stroke();
+                gateRoiPoints.forEach(drawGatePoint);
+            }
+
+            if (gateSeparatorPoints.length === 2) {
+                gateCanvasCtx.beginPath();
+                gateCanvasCtx.moveTo(gateSeparatorPoints[0].x, gateSeparatorPoints[0].y);
+                gateCanvasCtx.lineTo(gateSeparatorPoints[1].x, gateSeparatorPoints[1].y);
+                gateCanvasCtx.lineWidth = 3;
+                gateCanvasCtx.strokeStyle = '#ffb86c';
+                gateCanvasCtx.stroke();
+                gateSeparatorPoints.forEach(point => {
+                    gateCanvasCtx.beginPath();
+                    gateCanvasCtx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+                    gateCanvasCtx.fillStyle = '#ffb86c';
+                    gateCanvasCtx.fill();
+                });
+            }
+        }
+
+        function closeGatePolygon() {
+            if (gateRoiPoints.length < 3) {
+                showSystemAlert('ROI Incomplete', 'Please plot at least 3 points before closing the ROI.');
+                return;
+            }
+            gatePolygonClosed = true;
+            redrawGateCanvas();
+            updateGateStatus('ROI closed. Switch to Separator Mode and click where the left/right divider should be.');
+        }
+
+        function clearGateRoi() {
+            gateRoiPoints = [];
+            gatePolygonClosed = false;
+            gateSeparatorPoints = [];
+            document.getElementById('gateSeparatorValue').innerText = 'Not set';
+            redrawGateCanvas();
+            updateGateStatus('ROI cleared. Click to plot the gate area again.');
+        }
+
+        function clearGateSeparator() {
+            gateSeparatorPoints = [];
+            document.getElementById('gateSeparatorValue').innerText = 'Not set';
+            redrawGateCanvas();
+            updateGateStatus('Separator cleared. Click 2 points to draw a new divider line.');
+        }
+
+        function gateCanvasPointFromEvent(event) {
+            const rect = gateCanvas.getBoundingClientRect();
+            const scaleX = gateCanvas.width / rect.width;
+            const scaleY = gateCanvas.height / rect.height;
+            return {
+                x: Math.round((event.clientX - rect.left) * scaleX),
+                y: Math.round((event.clientY - rect.top) * scaleY),
+            };
+        }
+
+        gateCanvas.addEventListener('click', (event) => {
+            if (!gateReferenceImage) {
+                showSystemAlert('Reference Image Required', 'Upload a CCTV image before plotting the gate setup.');
+                return;
+            }
+
+            const point = gateCanvasPointFromEvent(event);
+            if (gateDrawMode === 'roi') {
+                if (gatePolygonClosed) {
+                    showSystemAlert('ROI Already Closed', 'Clear the ROI first if you want to redraw it.');
+                    return;
+                }
+                gateRoiPoints.push(point);
+                redrawGateCanvas();
+                updateGateStatus(`ROI point ${gateRoiPoints.length} added.`);
+            } else {
+                if (gateSeparatorPoints.length === 2) {
+                    gateSeparatorPoints = [];
+                }
+                gateSeparatorPoints.push(point);
+                document.getElementById('gateSeparatorValue').innerText = gateSeparatorPoints.length === 2
+                    ? `(${gateSeparatorPoints[0].x}, ${gateSeparatorPoints[0].y}) to (${gateSeparatorPoints[1].x}, ${gateSeparatorPoints[1].y})`
+                    : `Point 1 set at (${point.x}, ${point.y})`;
+                redrawGateCanvas();
+                updateGateStatus(
+                    gateSeparatorPoints.length === 2
+                        ? 'Separator line complete.'
+                        : 'Separator point 1 saved. Click a second point to complete the line.'
+                );
+            }
+        });
+
+        document.getElementById('gateReferenceImageInput').addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (gateReferenceImageObjectUrl) {
+                URL.revokeObjectURL(gateReferenceImageObjectUrl);
+            }
+            gateReferenceImageObjectUrl = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = () => {
+                gateReferenceImage = img;
+                gateReferenceImageChanged = true;
+                redrawGateCanvas();
+                updateGateStatus('Reference image loaded. Start plotting the ROI.');
+            };
+            img.src = gateReferenceImageObjectUrl;
+        });
+
+        async function openGateConfigModal() {
+            if (!activeSettingsCamId) return;
+
+            activeGateConfigCamId = activeSettingsCamId;
+            const cameraName = document.getElementById(`name-live-${activeGateConfigCamId}`).innerText;
+            document.getElementById('gateConfigCameraName').innerText = `${cameraName} (${activeGateConfigCamId})`;
+            resetGateEditorState();
+
+            try {
+                const response = await fetch(`/api/gate_config/${activeGateConfigCamId}`);
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    showSystemAlert('Gate Setup Error', data.message || 'Unable to load gate configuration.');
+                    return;
+                }
+
+                const config = data.config;
+                document.getElementById('gateDirectionSelect').value = config.direction || 'left_to_right_entry';
+                gateRoiPoints = (config.roi_points || []).map(point => ({ x: point.x, y: point.y }));
+                gatePolygonClosed = gateRoiPoints.length >= 3;
+                gateSeparatorPoints = (config.separator_points || []).map(point => ({ x: point.x, y: point.y }));
+                document.getElementById('gateSeparatorValue').innerText = gateSeparatorPoints.length === 2
+                    ? `(${gateSeparatorPoints[0].x}, ${gateSeparatorPoints[0].y}) to (${gateSeparatorPoints[1].x}, ${gateSeparatorPoints[1].y})`
+                    : 'Not set';
+
+                if (config.reference_image_path) {
+                    gateHasStoredImage = true;
+                    const img = new Image();
+                    img.onload = () => {
+                        gateReferenceImage = img;
+                        redrawGateCanvas();
+                    };
+                    img.src = config.reference_image_path;
+                } else {
+                    redrawGateCanvas();
+                }
+
+                closeCamSettings();
+                document.getElementById('gateConfigModal').classList.add('show');
+            } catch (error) {
+                console.error('Gate config load failed', error);
+                showSystemAlert('Gate Setup Error', 'Failed to load the saved gate configuration.');
+            }
+        }
+
+        function closeGateConfigModal(e) {
+            if (e && e.target.id !== 'gateConfigModal' && !e.target.classList.contains('close-modal')) return;
+            document.getElementById('gateConfigModal').classList.remove('show');
+            activeGateConfigCamId = null;
+        }
+
+        async function saveGateConfig() {
+            if (!activeGateConfigCamId) return;
+            if (!gateReferenceImage && !document.getElementById('gateReferenceImageInput').files[0] && !gateHasStoredImage) {
+                showSystemAlert('Reference Image Required', 'Please upload a CCTV image before saving.');
+                return;
+            }
+            if (gateRoiPoints.length < 3 || !gatePolygonClosed) {
+                showSystemAlert('ROI Required', 'Please plot and close the ROI polygon before saving.');
+                return;
+            }
+            if (gateSeparatorPoints.length !== 2) {
+                showSystemAlert('Separator Required', 'Please place exactly 2 separator points before saving.');
+                return;
+            }
+
+            const formData = new FormData();
+            const imageInput = document.getElementById('gateReferenceImageInput');
+            if (imageInput.files[0]) {
+                formData.append('reference_image', imageInput.files[0]);
+            }
+            formData.append('roi_points', JSON.stringify(gateRoiPoints));
+            formData.append('separator_points', JSON.stringify(gateSeparatorPoints));
+            formData.append('split_x', '');
+            formData.append('direction', document.getElementById('gateDirectionSelect').value);
+
+            try {
+                const response = await fetch(`/api/gate_config/${activeGateConfigCamId}`, {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    showSystemAlert('Save Failed', data.message || 'Unable to save gate configuration.');
+                    return;
+                }
+
+                showToast('Gate counter setup saved', document.getElementById(`name-live-${activeGateConfigCamId}`).innerText, 'Gate Setup');
+                closeGateConfigModal();
+            } catch (error) {
+                console.error('Gate config save failed', error);
+                showSystemAlert('Save Failed', 'Failed to save the gate configuration to the server.');
+            }
+        }
+
+        async function resetGateConfig() {
+            if (!activeGateConfigCamId) return;
+
+            if (!confirm('Reset the saved gate setup for this camera?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/gate_config/${activeGateConfigCamId}/reset`, { method: 'POST' });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    showSystemAlert('Reset Failed', data.message || 'Unable to reset gate setup.');
+                    return;
+                }
+
+                resetGateEditorState();
+                showToast('Gate counter setup reset', document.getElementById(`name-live-${activeGateConfigCamId}`).innerText, 'Gate Setup');
+            } catch (error) {
+                console.error('Gate config reset failed', error);
+                showSystemAlert('Reset Failed', 'Failed to reset the gate configuration.');
             }
         }
 

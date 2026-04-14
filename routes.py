@@ -1,11 +1,16 @@
+import os
 import time
+import uuid
 
 from flask import Response, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.utils import secure_filename
 
 import anomalies
 from camera_streams import generate_frames, start_camera_thread, stop_camera_thread
 from config import (
+    CLICKED_RESOLUTION,
     FLOOR_OPTIONS_BY_ZONE,
+    GATE_CONFIG_UPLOAD_DIR,
     LOGIN_PASSWORD,
     LOGIN_USERNAME,
     UNITY_ANOMALY_WINDOW_SECONDS,
@@ -14,15 +19,18 @@ from config import (
 from database import (
     add_zone,
     delete_camera,
+    delete_gate_config,
     dismiss_all_anomalies,
     dismiss_anomaly,
     fetch_active_anomalies,
     fetch_anomaly_history,
+    fetch_gate_config,
     fetch_history,
     fetch_recent_unresolved_anomalies,
     fetch_zones,
     insert_camera,
     remove_zone,
+    upsert_gate_config,
     update_camera,
 )
 
@@ -36,6 +44,38 @@ def _camera_floor_lookup(camera_registry):
         cam_id: info.get("floor", "")
         for cam_id, info in camera_registry.snapshot().items()
     }
+
+
+def _serialize_gate_config(config):
+    if not config:
+        return {
+            "is_gate_camera": False,
+            "reference_image_path": "",
+            "roi_points": [],
+            "split_x": None,
+            "direction": "left_to_right_entry",
+        }
+
+    separator_points = config.get("separator_points", [])
+    if not separator_points and config.get("split_x") is not None:
+        separator_points = [
+            {"x": int(config["split_x"]), "y": 0},
+            {"x": int(config["split_x"]), "y": CLICKED_RESOLUTION[1]},
+        ]
+
+    return {
+        "is_gate_camera": True,
+        "reference_image_path": config.get("reference_image_path", ""),
+        "roi_points": config.get("roi_points", []),
+        "split_x": config.get("split_x"),
+        "separator_points": separator_points,
+        "direction": config.get("direction") or "left_to_right_entry",
+    }
+
+
+def _allowed_gate_image(filename):
+    _, ext = os.path.splitext(filename.lower())
+    return ext in {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def register_routes(app, camera_registry):
@@ -87,6 +127,7 @@ def register_routes(app, camera_registry):
         return render_template(
             "index.html",
             cameras=camera_registry.snapshot(),
+            clicked_resolution=CLICKED_RESOLUTION,
             floor_options_by_zone=FLOOR_OPTIONS_BY_ZONE,
             all_zones=fetch_zones(order_by_name=True),
         )
@@ -133,6 +174,13 @@ def register_routes(app, camera_registry):
                 "count": 0,
                 "is_active": False,
                 "last_updated": time.time(),
+                "is_gate_camera": False,
+                "gate_direction": "",
+                "gate_split_x": None,
+                "gate_roi_points": [],
+                "gate_reference_image_path": "",
+                "entry_count": 0,
+                "exit_count": 0,
             },
         )
         start_camera_thread(camera_registry, new_id, camera_url)
@@ -143,6 +191,7 @@ def register_routes(app, camera_registry):
         if camera_registry.has(camera_id):
             stop_camera_thread(camera_id)
             camera_registry.remove(camera_id)
+            delete_gate_config(camera_id)
             delete_camera(camera_id)
         return redirect(url_for("index"))
 
@@ -179,6 +228,115 @@ def register_routes(app, camera_registry):
 
         return jsonify({"status": "error", "message": "Camera not found"}), 404
 
+    @app.route("/api/gate_config/<camera_id>")
+    def get_gate_config_route(camera_id):
+        if not camera_registry.has(camera_id):
+            return jsonify({"status": "error", "message": "Camera not found"}), 404
+        return jsonify({"status": "success", "config": _serialize_gate_config(fetch_gate_config(camera_id))})
+
+    @app.route("/api/gate_config/<camera_id>", methods=["POST"])
+    def save_gate_config_route(camera_id):
+        if not camera_registry.has(camera_id):
+            return jsonify({"status": "error", "message": "Camera not found"}), 404
+
+        roi_points_raw = request.form.get("roi_points", "[]")
+        separator_points_raw = request.form.get("separator_points", "[]")
+        split_x_raw = request.form.get("split_x", "").strip()
+        direction = (request.form.get("direction") or "").strip()
+        existing_config = fetch_gate_config(camera_id)
+
+        try:
+            import json
+            roi_points = json.loads(roi_points_raw)
+            separator_points = json.loads(separator_points_raw)
+        except Exception:
+            return jsonify({"status": "error", "message": "ROI or separator payload is invalid."}), 400
+
+        if not isinstance(roi_points, list) or len(roi_points) < 3:
+            return jsonify({"status": "error", "message": "Please plot at least 3 ROI points."}), 400
+        if not isinstance(separator_points, list) or len(separator_points) != 2:
+            return jsonify({"status": "error", "message": "Please plot exactly 2 separator points."}), 400
+
+        normalized_roi_points = []
+        for point in roi_points:
+            if not isinstance(point, dict):
+                return jsonify({"status": "error", "message": "ROI points must be objects."}), 400
+            try:
+                x = int(point["x"])
+                y = int(point["y"])
+            except Exception:
+                return jsonify({"status": "error", "message": "ROI point coordinates are invalid."}), 400
+            normalized_roi_points.append({"x": x, "y": y})
+
+        normalized_separator_points = []
+        for point in separator_points:
+            if not isinstance(point, dict):
+                return jsonify({"status": "error", "message": "Separator points must be objects."}), 400
+            try:
+                x = int(point["x"])
+                y = int(point["y"])
+            except Exception:
+                return jsonify({"status": "error", "message": "Separator point coordinates are invalid."}), 400
+            normalized_separator_points.append({"x": x, "y": y})
+
+        if direction not in {"left_to_right_entry", "right_to_left_entry"}:
+            return jsonify({"status": "error", "message": "Direction is invalid."}), 400
+
+        split_x = None
+        if split_x_raw:
+            try:
+                split_x = int(split_x_raw)
+            except ValueError:
+                return jsonify({"status": "error", "message": "Separator value must be numeric."}), 400
+            if split_x < 0 or split_x > CLICKED_RESOLUTION[0]:
+                return jsonify({"status": "error", "message": "Separator is outside the image width."}), 400
+
+        reference_image_path = existing_config.get("reference_image_path", "") if existing_config else ""
+        uploaded_image = request.files.get("reference_image")
+        if uploaded_image and uploaded_image.filename:
+            if not _allowed_gate_image(uploaded_image.filename):
+                return jsonify({"status": "error", "message": "Reference image must be JPG, PNG, or WEBP."}), 400
+
+            os.makedirs(GATE_CONFIG_UPLOAD_DIR, exist_ok=True)
+            _, ext = os.path.splitext(uploaded_image.filename)
+            safe_name = secure_filename(f"{camera_id}_{uuid.uuid4().hex}{ext.lower()}")
+            saved_path = os.path.join(GATE_CONFIG_UPLOAD_DIR, safe_name)
+            uploaded_image.save(saved_path)
+            reference_image_path = "/" + saved_path.replace("\\", "/")
+
+        if not reference_image_path:
+            return jsonify({"status": "error", "message": "Please upload a CCTV reference image first."}), 400
+
+        gate_config = {
+            "reference_image_path": reference_image_path,
+            "roi_points": normalized_roi_points,
+            "split_x": split_x,
+            "separator_points": normalized_separator_points,
+            "direction": direction,
+        }
+
+        upsert_gate_config(
+            camera_id,
+            reference_image_path,
+            normalized_roi_points,
+            split_x,
+            normalized_separator_points,
+            direction,
+        )
+        camera_registry.set_gate_config(camera_id, gate_config)
+        camera_registry.reset_gate_totals(camera_id)
+        return jsonify({"status": "success", "config": _serialize_gate_config(gate_config)})
+
+    @app.route("/api/gate_config/<camera_id>/reset", methods=["POST"])
+    def reset_gate_config_route(camera_id):
+        if not camera_registry.has(camera_id):
+            return jsonify({"status": "error", "message": "Camera not found"}), 404
+
+        delete_gate_config(camera_id)
+        camera_registry.set_gate_config(camera_id, None)
+        camera_registry.reset_gate_totals(camera_id)
+        return jsonify({"status": "success"})
+
     @app.route("/api/stats")
     def get_stats():
         cameras_snapshot = camera_registry.snapshot()
@@ -190,10 +348,19 @@ def register_routes(app, camera_registry):
                 "floor": info.get("floor", ""),
                 "is_active": info.get("is_active", False),
                 "last_updated": info.get("last_updated", time.time()),
+                "is_gate_camera": info.get("is_gate_camera", False),
+                "gate_direction": info.get("gate_direction", ""),
+                "entry_count": info.get("entry_count", 0),
+                "exit_count": info.get("exit_count", 0),
+                "gate_split_x": info.get("gate_split_x"),
             }
             for cid, info in cameras_snapshot.items()
         }
         return jsonify(data)
+
+    @app.route("/api/gate_stats")
+    def get_gate_stats():
+        return jsonify(camera_registry.get_gate_summary())
 
     @app.route("/api/toggle_group/<group_name>", methods=["POST"])
     def toggle_group(group_name):

@@ -428,3 +428,90 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
 .page-btn:hover:not(:disabled) { border-color: #00D4FF; color: white; }
 .page-btn.active  { background: #00D4FF; color: black; border-color: #00D4FF; }
 .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.gate-config-modal-content {
+    width: 92vw;
+    max-width: 1240px;
+    max-height: 90vh;
+    padding: 24px;
+    overflow-y: auto;
+}
+
+.gate-config-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.gate-config-label {
+    display: block;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+}
+
+.gate-config-input {
+    width: 100%;
+    padding: 10px 12px;
+    background: #000;
+    border: 1px solid #444;
+    color: white;
+    border-radius: 6px;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+
+.gate-tool-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.gate-tool-btn {
+    background: #122226;
+    border: 1px solid #1f3b48;
+    color: #cbd5e1;
+    padding: 9px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.gate-tool-btn.active {
+    background: #03dac6;
+    color: #03131a;
+    border-color: #03dac6;
+}
+
+.gate-canvas-shell {
+    background: #05070d;
+    border: 1px solid #1f3b48;
+    border-radius: 12px;
+    padding: 10px;
+    overflow: auto;
+}
+
+#gateConfigCanvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: #0b1020;
+    border-radius: 8px;
+    cursor: crosshair;
+}
+
+.gate-coords-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+
+@media (max-width: 960px) {
+    .gate-config-layout {
+        grid-template-columns: 1fr;
+    }
+}
