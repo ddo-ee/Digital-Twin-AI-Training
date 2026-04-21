@@ -55,6 +55,7 @@ def _serialize_gate_config(config, roi_config=None):
             "is_gate_camera": False,
             "reference_image_path": roi_config.get("reference_image_path", "") if roi_config else "",
             "roi_points": roi_config.get("roi_points", []) if roi_config else [],
+            "roi_closed": roi_config.get("roi_closed", True) if roi_config else True,
             "split_x": None,
             "separator_points": [],
             "direction": "left_to_right_entry",
@@ -71,6 +72,7 @@ def _serialize_gate_config(config, roi_config=None):
         "is_gate_camera": True,
         "reference_image_path": roi_config.get("reference_image_path", config.get("reference_image_path", "")) if roi_config else config.get("reference_image_path", ""),
         "roi_points": roi_config.get("roi_points", config.get("roi_points", [])) if roi_config else config.get("roi_points", []),
+        "roi_closed": roi_config.get("roi_closed", config.get("roi_closed", True)) if roi_config else config.get("roi_closed", True),
         "split_x": config.get("split_x"),
         "separator_points": separator_points,
         "direction": config.get("direction") or "left_to_right_entry",
@@ -248,6 +250,7 @@ def register_routes(app, camera_registry):
 
         roi_points_raw = request.form.get("roi_points", "[]")
         separator_points_raw = request.form.get("separator_points", "[]")
+        roi_closed = (request.form.get("roi_closed") or "").lower() == "true"
         split_x_raw = request.form.get("split_x", "").strip()
         direction = (request.form.get("direction") or "").strip()
         is_gate_camera = (request.form.get("is_gate_camera") or "").lower() == "true"
@@ -327,6 +330,7 @@ def register_routes(app, camera_registry):
             camera_id,
             reference_image_path,
             normalized_roi_points,
+            roi_closed,
         )
 
         camera_registry.set_gate_config(
@@ -334,6 +338,7 @@ def register_routes(app, camera_registry):
             {
                 "reference_image_path": reference_image_path,
                 "roi_points": normalized_roi_points,
+                "roi_closed": roi_closed,
                 "split_x": split_x,
                 "separator_points": normalized_separator_points,
                 "direction": direction,
@@ -346,6 +351,7 @@ def register_routes(app, camera_registry):
                 {
                     **current_info,
                     "roi_points": normalized_roi_points,
+                    "roi_closed": roi_closed,
                     "reference_image_path": reference_image_path,
                 },
             )
@@ -354,6 +360,7 @@ def register_routes(app, camera_registry):
             gate_config = {
                 "reference_image_path": reference_image_path,
                 "roi_points": normalized_roi_points,
+                "roi_closed": roi_closed,
                 "split_x": split_x,
                 "separator_points": normalized_separator_points,
                 "direction": direction,
@@ -365,6 +372,7 @@ def register_routes(app, camera_registry):
                 split_x,
                 normalized_separator_points,
                 direction,
+                roi_closed,
             )
         else:
             gate_config = None
@@ -373,7 +381,7 @@ def register_routes(app, camera_registry):
         camera_registry.reset_gate_totals(camera_id)
         serialized_config = _serialize_gate_config(
             {"camera_id": camera_id, **(gate_config or {})} if gate_config else None,
-            {"camera_id": camera_id, "reference_image_path": reference_image_path, "roi_points": normalized_roi_points},
+            {"camera_id": camera_id, "reference_image_path": reference_image_path, "roi_points": normalized_roi_points, "roi_closed": roi_closed},
         )
         return jsonify({"status": "success", "config": serialized_config})
 
@@ -393,6 +401,7 @@ def register_routes(app, camera_registry):
                 {
                     **current_info,
                     "roi_points": [],
+                    "roi_closed": True,
                     "reference_image_path": "",
                 },
             )

@@ -67,10 +67,32 @@ def _scale_poly_points(raw_points):
     return (np.array(normalized_points, np.float32) * [scale_w, scale_h]).astype(np.int32)
 
 
+def _build_effective_roi_poly(raw_points, roi_closed=True):
+    scaled_points = _scale_poly_points(raw_points)
+    if scaled_points is None or len(scaled_points) < 3:
+        return None
+
+    if roi_closed:
+        return scaled_points
+
+    bottom_y = PROCESSING_RESOLUTION[1] - 1
+    first_point = scaled_points[0]
+    last_point = scaled_points[-1]
+    extension_points = np.array(
+        [
+            [last_point[0], bottom_y],
+            [first_point[0], bottom_y],
+        ],
+        dtype=np.int32,
+    )
+    return np.vstack([scaled_points, extension_points])
+
+
 def _build_gate_camera_defaults(gate_config=None, camera_roi=None):
     is_gate_camera = bool(gate_config)
     return {
         "roi_points": (camera_roi or {}).get("roi_points", []),
+        "roi_closed": (camera_roi or {}).get("roi_closed", True),
         "reference_image_path": (camera_roi or {}).get("reference_image_path", ""),
         "is_gate_camera": is_gate_camera,
         "gate_direction": gate_config.get("direction", "") if is_gate_camera else "",
@@ -220,7 +242,7 @@ def camera_worker(camera_registry, camera_id, source):
     while thread_run_flags.get(camera_id, False):
         cam_info = camera_registry.get(camera_id) or {}
         roi_points = cam_info.get("roi_points") or []
-        scaled_poly = _scale_poly_points(roi_points) if roi_points else None
+        scaled_poly = _build_effective_roi_poly(roi_points, cam_info.get("roi_closed", True)) if roi_points else None
         if scaled_poly is None and fallback_raw_poly is not None:
             scaled_poly = _scale_poly_points(fallback_raw_poly.tolist())
 

@@ -110,7 +110,7 @@
                     </div>
 
                     <p id="gateConfigStatus" style="color: #94a3b8; font-size: 0.85rem; margin-top: 16px;">
-                        Upload an image, then click to plot the ROI. Enable gate counter only if this camera should track entry and exit.
+                        Upload an image, then click to plot the ROI. Leave it open to extend down to the bottom edge, or use Close ROI for a fully enclosed polygon.
                     </p>
                 </div>
 
@@ -1119,7 +1119,7 @@
             // Reset gate counter checkbox and hide its fields
             document.getElementById('gateCounterEnabled').checked = false;
             document.getElementById('gateCounterFields').style.display = 'none';
-            updateGateStatus('Upload an image, then click to plot the ROI. Enable gate counter only if this camera should track entry and exit.');
+            updateGateStatus('Upload an image, then click to plot the ROI. Leave it open to extend down to the bottom edge, or use Close ROI for a fully enclosed polygon.');
             updateGateModeButtons();
             redrawGateCanvas();
         }
@@ -1137,10 +1137,24 @@
             gateDrawMode = mode;
             updateGateModeButtons();
             if (mode === 'roi') {
-                updateGateStatus('ROI Mode: click around the gate area. Use Close ROI when the polygon is complete.');
+                updateGateStatus('ROI Mode: click around the gate area. Leave it open to extend to the bottom edge, or use Close ROI for a closed polygon.');
             } else {
                 updateGateStatus('Separator Mode: click 2 points to draw the left/right divider line inside the ROI.');
             }
+        }
+
+        function getEffectiveGateRoiPoints() {
+            if (gateRoiPoints.length < 3) return [];
+            if (gatePolygonClosed) return gateRoiPoints;
+
+            const bottomY = gateCanvas.height;
+            const firstPoint = gateRoiPoints[0];
+            const lastPoint = gateRoiPoints[gateRoiPoints.length - 1];
+            return [
+                ...gateRoiPoints,
+                { x: lastPoint.x, y: bottomY },
+                { x: firstPoint.x, y: bottomY },
+            ];
         }
 
         function drawGatePoint(point) {
@@ -1168,19 +1182,42 @@
             }
 
             if (gateRoiPoints.length > 0) {
+                const effectiveRoiPoints = getEffectiveGateRoiPoints();
+                if (effectiveRoiPoints.length >= 3) {
+                    gateCanvasCtx.beginPath();
+                    gateCanvasCtx.moveTo(effectiveRoiPoints[0].x, effectiveRoiPoints[0].y);
+                    for (let i = 1; i < effectiveRoiPoints.length; i++) {
+                        gateCanvasCtx.lineTo(effectiveRoiPoints[i].x, effectiveRoiPoints[i].y);
+                    }
+                    gateCanvasCtx.closePath();
+                    gateCanvasCtx.fillStyle = 'rgba(3, 218, 198, 0.12)';
+                    gateCanvasCtx.fill();
+                }
+
                 gateCanvasCtx.beginPath();
                 gateCanvasCtx.moveTo(gateRoiPoints[0].x, gateRoiPoints[0].y);
                 for (let i = 1; i < gateRoiPoints.length; i++) {
                     gateCanvasCtx.lineTo(gateRoiPoints[i].x, gateRoiPoints[i].y);
                 }
-                if (gatePolygonClosed && gateRoiPoints.length > 2) {
-                    gateCanvasCtx.closePath();
-                    gateCanvasCtx.fillStyle = 'rgba(3, 218, 198, 0.15)';
-                    gateCanvasCtx.fill();
-                }
                 gateCanvasCtx.lineWidth = 3;
                 gateCanvasCtx.strokeStyle = '#03dac6';
                 gateCanvasCtx.stroke();
+
+                if (!gatePolygonClosed && gateRoiPoints.length >= 2) {
+                    const firstPoint = gateRoiPoints[0];
+                    const lastPoint = gateRoiPoints[gateRoiPoints.length - 1];
+                    gateCanvasCtx.beginPath();
+                    gateCanvasCtx.setLineDash([10, 8]);
+                    gateCanvasCtx.moveTo(lastPoint.x, lastPoint.y);
+                    gateCanvasCtx.lineTo(lastPoint.x, gateCanvas.height);
+                    gateCanvasCtx.lineTo(firstPoint.x, gateCanvas.height);
+                    gateCanvasCtx.lineTo(firstPoint.x, firstPoint.y);
+                    gateCanvasCtx.lineWidth = 2;
+                    gateCanvasCtx.strokeStyle = 'rgba(3, 218, 198, 0.7)';
+                    gateCanvasCtx.stroke();
+                    gateCanvasCtx.setLineDash([]);
+                }
+
                 gateRoiPoints.forEach(drawGatePoint);
             }
 
@@ -1207,7 +1244,7 @@
             }
             gatePolygonClosed = true;
             redrawGateCanvas();
-            updateGateStatus('ROI closed. Enable gate counter if needed, or save the ROI as-is.');
+            updateGateStatus('ROI closed as a full polygon. Save when you are ready.');
         }
 
         function clearGateRoi() {
@@ -1216,7 +1253,7 @@
             gateSeparatorPoints = [];
             document.getElementById('gateSeparatorValue').innerText = 'Not set';
             redrawGateCanvas();
-            updateGateStatus('ROI cleared. Click to plot the gate area again.');
+            updateGateStatus('ROI cleared. Click to plot the area again.');
         }
 
         function clearGateSeparator() {
@@ -1250,7 +1287,7 @@
                 }
                 gateRoiPoints.push(point);
                 redrawGateCanvas();
-                updateGateStatus(`ROI point ${gateRoiPoints.length} added.`);
+                updateGateStatus(`ROI point ${gateRoiPoints.length} added. ${gatePolygonClosed ? 'Polygon is closed.' : 'Leave it open to extend to the bottom edge, or click Close ROI.'}`);
             } else {
                 if (gateSeparatorPoints.length === 2) {
                     gateSeparatorPoints = [];
@@ -1316,7 +1353,7 @@
 
                 document.getElementById('gateDirectionSelect').value = config.direction || 'left_to_right_entry';
                 gateRoiPoints = (config.roi_points || []).map(point => ({ x: point.x, y: point.y }));
-                gatePolygonClosed = gateRoiPoints.length >= 3;
+                gatePolygonClosed = config.roi_closed === true;
                 gateSeparatorPoints = (config.separator_points || []).map(point => ({ x: point.x, y: point.y }));
                 document.getElementById('gateSeparatorValue').innerText = gateSeparatorPoints.length === 2
                     ? `(${gateSeparatorPoints[0].x}, ${gateSeparatorPoints[0].y}) to (${gateSeparatorPoints[1].x}, ${gateSeparatorPoints[1].y})`
@@ -1355,8 +1392,8 @@
                 showSystemAlert('Reference Image Required', 'Please upload a CCTV image before saving.');
                 return;
             }
-            if (gateRoiPoints.length < 3 || !gatePolygonClosed) {
-                showSystemAlert('ROI Required', 'Please plot and close the ROI polygon before saving.');
+            if (gateRoiPoints.length < 3) {
+                showSystemAlert('ROI Required', 'Please plot at least 3 ROI points before saving.');
                 return;
             }
 
@@ -1377,6 +1414,7 @@
             }
 
             formData.append('roi_points', JSON.stringify(gateRoiPoints));
+            formData.append('roi_closed', gatePolygonClosed ? 'true' : 'false');
 
             // FIX 2: Correct variable name for separator points
             formData.append('separator_points', JSON.stringify(gateSeparatorPoints));
@@ -1400,6 +1438,7 @@
                     return;
                 }
 
+                gatePolygonClosed = data.config?.roi_closed === true;
                 showToast('ROI setup saved', document.getElementById(`name-live-${activeGateConfigCamId}`).innerText, 'ROI Setup');
                 closeGateConfigModal();
             } catch (error) {
