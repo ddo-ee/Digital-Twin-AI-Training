@@ -142,6 +142,15 @@ class CameraRegistry:
             for info in self._cameras.values():
                 info["is_active"] = is_active
 
+    def set_gate_cameras_active(self, is_active):
+        with self._lock:
+            affected = 0
+            for info in self._cameras.values():
+                if info.get("is_gate_camera", False):
+                    info["is_active"] = is_active
+                    affected += 1
+            return affected
+
     def toggle_active(self, camera_id):
         with self._lock:
             if camera_id not in self._cameras:

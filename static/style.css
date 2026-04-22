@@ -420,7 +420,7 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
     grid-column: 1 / -1;
 }
 .campus-overview-card {
-    grid-column: 1 / -1;
+    grid-column: span 2;
 }
 .campus-gate-summary {
     display: grid;
@@ -443,6 +443,16 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
 .campus-inside-value {
     font-size: 4.25rem;
     line-height: 1;
+}
+.campus-action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 18px;
+}
+.campus-action-btn[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 .zone-chart-card { transition: 0.3s; cursor: pointer; }
 .zone-chart-card:hover {
@@ -565,5 +575,11 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
     }
     .campus-inside-value {
         font-size: 3.4rem;
+    }
+    .campus-overview-card {
+        grid-column: span 1;
+    }
+    .campus-action-row {
+        grid-template-columns: 1fr;
     }
 }

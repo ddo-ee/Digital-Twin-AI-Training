@@ -356,7 +356,9 @@ def camera_worker(camera_registry, camera_id, source):
                 with model_lock:
                     results = model(frame, conf=MODEL_CONFIDENCE, imgsz=MODEL_IMAGE_SIZE, verbose=False)
 
-            annotated_frame = results[0].plot(labels=False, conf=False)
+            # Gate cameras keep full tracked overlays, but normal ROI cameras
+            # should only show detections that actually count inside the ROI.
+            annotated_frame = results[0].plot(labels=False, conf=False) if is_gate_camera else frame.copy()
             person_count = 0
             tracked_points = []
 
@@ -370,6 +372,8 @@ def camera_worker(camera_registry, camera_id, source):
                     is_inside = cv2.pointPolygonTest(scaled_poly, (foot_x, foot_y), False)
                     if is_inside >= 0:
                         person_count += 1
+                        if not is_gate_camera:
+                            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.circle(annotated_frame, (foot_x, foot_y), 5, (0, 0, 255), -1)
                         if is_gate_camera and track_id is not None:
                             gate_side = _resolve_gate_side(foot_x, foot_y, gate_separator_points)
@@ -392,6 +396,8 @@ def camera_worker(camera_registry, camera_id, source):
                             )
                 else:
                     person_count += 1
+                    if not is_gate_camera:
+                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             if scaled_poly is not None:
                 cv2.polylines(

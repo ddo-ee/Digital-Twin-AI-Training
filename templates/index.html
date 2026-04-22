@@ -621,6 +621,16 @@
             } catch (error) { console.error("Master toggle failed", error); }
         }
 
+        async function toggleGateCameras(action) {
+            try {
+                await fetch('/api/toggle_gate_cameras', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+            } catch (error) { console.error("Gate camera toggle failed", error); }
+        }
+
         // --- 7. BACKGROUND ANALYTICS POLLING ---
         setInterval(async () => {
             try {
@@ -636,6 +646,8 @@
                 let activePeople       = 0;
                 let totalKnownPeople   = 0;
                 let allCamerasActive   = true;
+                let allGateCamerasActive = true;
+                let gateCameraCount = 0;
                 const now = Math.floor(Date.now() / 1000);
 
                 for (const [camId, info] of Object.entries(data)) {
@@ -681,6 +693,11 @@
                     totalKnownPeople += info.count;
                     if (info.is_active) activePeople += info.count;
 
+                    if (info.is_gate_camera) {
+                        gateCameraCount += 1;
+                        if (!info.is_active) allGateCamerasActive = false;
+                    }
+
                     if (!groupActive[info.group]) groupActive[info.group] = false;
                     if (info.is_active) groupActive[info.group] = true;
                 }
@@ -692,6 +709,10 @@
                     let masterBtnText   = allCamerasActive ? "Pause All Cameras" : "Start All Cameras";
                     let masterBtnColor  = allCamerasActive ? "#cf6679" : "#03dac6";
                     let masterAction    = allCamerasActive ? "stop" : "start";
+                    let gateBtnText     = allGateCamerasActive ? "Pause University Gate Cameras" : "Start University Gate Cameras";
+                    let gateBtnColor    = allGateCamerasActive ? "#cf6679" : "#ffb86c";
+                    let gateBtnAction   = allGateCamerasActive ? "stop" : "start";
+                    let gateBtnDisabled = gateCameraCount === 0 ? 'disabled' : '';
 
                     let html = `<div class="stat-card campus-overview-card" style="border-color: #ffb86c;">
                                     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
@@ -719,9 +740,14 @@
                                             <p class="stat-sub" style="margin-top: 0;">Exited</p>
                                         </div>
                                     </div>
-                                    <button onclick="toggleAll('${masterAction}')" style="margin-top: 18px; background: #222; color: ${masterBtnColor}; border: 1px solid ${masterBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
-                                        <i class="fas ${allCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${masterBtnText}
-                                    </button>
+                                    <div class="campus-action-row">
+                                        <button class="campus-action-btn" onclick="toggleAll('${masterAction}')" style="background: #222; color: ${masterBtnColor}; border: 1px solid ${masterBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
+                                            <i class="fas ${allCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${masterBtnText}
+                                        </button>
+                                        <button class="campus-action-btn" onclick="toggleGateCameras('${gateBtnAction}')" ${gateBtnDisabled} style="background: #222; color: ${gateBtnColor}; border: 1px solid ${gateBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
+                                            <i class="fas ${allGateCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${gateCameraCount === 0 ? 'No Gate Cameras Configured' : gateBtnText}
+                                        </button>
+                                    </div>
                                 </div>`;
 
                     for (const [groupName, groupData] of Object.entries(groups)) {

@@ -448,6 +448,12 @@ def register_routes(app, camera_registry):
         camera_registry.set_all_active(action == "start")
         return jsonify({"status": "success", "action": action})
 
+    @app.route("/api/toggle_gate_cameras", methods=["POST"])
+    def toggle_gate_cameras():
+        action = request.json.get("action")
+        affected = camera_registry.set_gate_cameras_active(action == "start")
+        return jsonify({"status": "success", "action": action, "affected": affected})
+
     @app.route("/api/toggle/<camera_id>", methods=["POST"])
     def toggle_camera(camera_id):
         new_state = camera_registry.toggle_active(camera_id)
