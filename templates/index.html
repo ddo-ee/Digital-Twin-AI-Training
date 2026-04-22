@@ -272,13 +272,20 @@
                 </div>
 
                 <div id="dashboard-charts" style="display: none;">
-                    <div class="chart-wrapper">
-                        <h3 style="color: #03dac6; margin-top: 0;">Overall Campus Traffic</h3>
-                        <canvas id="campusChart" height="80"></canvas>
+                    <div class="history-chart-grid">
+                        <div class="chart-wrapper">
+                            <h3 style="color: #03dac6; margin-top: 0;">Campus Overview: Entrance</h3>
+                            <canvas id="campusInChart" height="120"></canvas>
+                        </div>
+                        <div class="chart-wrapper">
+                            <h3 style="color: #cf6679; margin-top: 0;">Campus Overview: Exit</h3>
+                            <canvas id="campusOutChart" height="120"></canvas>
+                        </div>
+                        <div class="chart-wrapper history-chart-wide">
+                            <h3 style="color: #ffb86c; margin-top: 0;">Campus Overview: Total Inside Campus</h3>
+                            <canvas id="campusInsideChart" height="110"></canvas>
+                        </div>
                     </div>
-
-                    <h3 style="color: #fff; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;">Building Breakdown</h3>
-                    <div class="dashboard-grid" id="zone-charts-container"></div>
                 </div>
             </div>
 
@@ -680,52 +687,42 @@
 
                 if (document.getElementById('dashboard-view').classList.contains('active')) {
                     let totalCardBorder = allCamerasActive ? "#03dac6" : "#ffb86c";
-                    let activeSubtext   = allCamerasActive ? "System is 100% Live" : "Contains paused historical data";
-                    let icon            = allCamerasActive ? "fa-check-circle" : "fa-exclamation-triangle";
+                    let activeSubtext   = allCamerasActive ? "" : "";
+                    let icon            = allCamerasActive ? "" : "";  //"fa-check-circle", //"fa-exclamation-triangle"
                     let masterBtnText   = allCamerasActive ? "Pause All Cameras" : "Start All Cameras";
                     let masterBtnColor  = allCamerasActive ? "#cf6679" : "#03dac6";
                     let masterAction    = allCamerasActive ? "stop" : "start";
 
-                    let html = `<div class="stat-card" style="border-color: ${totalCardBorder};">
-                                    <h3 style="color: ${totalCardBorder};">CAMPUS OVERVIEW</h3>
-                                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px;">
+                    let html = `<div class="stat-card campus-overview-card" style="border-color: #ffb86c;">
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
                                         <div>
-                                            <p class="stat-value" style="color: ${totalCardBorder}; margin-bottom: 0;">${totalKnownPeople}</p>
-                                            <p class="stat-sub" style="margin-top: 0;">Last Known Total</p>
+                                            <h3 style="color: #ffb86c;">CAMPUS OVERVIEW</h3>
+                                            <p style="color: ${totalCardBorder}; font-size: 0.85rem; margin: 0; font-weight: bold;">
+                                                <i class="fas ${icon}"></i> ${activeSubtext}
+                                            </p>
                                         </div>
-                                        <div style="text-align: right; border-left: 1px solid #444; padding-left: 15px;">
-                                            <p class="stat-value" style="font-size: 1.8rem; color: #fff; margin-bottom: 0;">${activePeople}</p>
-                                            <p class="stat-sub" style="margin-top: 0;">Live Now</p>
+                                        <p style="color: #888; font-size: 0.85rem; margin: 0;">
+                                            Gate cameras configured: ${gateStats.cameras.length}
+                                        </p>
+                                    </div>
+                                    <div class="campus-gate-summary">
+                                        <div class="campus-gate-stat">
+                                            <p class="stat-value" style="color: #03dac6; margin-bottom: 0;">${gateStats.total_entered}</p>
+                                            <p class="stat-sub" style="margin-top: 0;">Entered</p>
+                                        </div>
+                                        <div class="campus-gate-inside">
+                                            <p class="stat-value campus-inside-value" style="color: #ffb86c; margin-bottom: 0;">${gateStats.inside_total}</p>
+                                            <p class="stat-sub" style="margin-top: 6px;">Total Inside Campus</p>
+                                        </div>
+                                        <div class="campus-gate-stat" style="text-align: right;">
+                                            <p class="stat-value" style="color: #cf6679; margin-bottom: 0;">${gateStats.total_exited}</p>
+                                            <p class="stat-sub" style="margin-top: 0;">Exited</p>
                                         </div>
                                     </div>
-                                    <p style="color: ${totalCardBorder}; font-size: 0.85rem; margin-top: 15px; font-weight: bold;">
-                                        <i class="fas ${icon}"></i> ${activeSubtext}
-                                    </p>
-                                    <button onclick="toggleAll('${masterAction}')" style="margin-top: 10px; background: #222; color: ${masterBtnColor}; border: 1px solid ${masterBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
+                                    <button onclick="toggleAll('${masterAction}')" style="margin-top: 18px; background: #222; color: ${masterBtnColor}; border: 1px solid ${masterBtnColor}; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight:bold; width: 100%; transition: 0.3s;">
                                         <i class="fas ${allCamerasActive ? 'fa-pause' : 'fa-play'}"></i> ${masterBtnText}
                                     </button>
                                 </div>`;
-
-                    html += `<div class="stat-card" style="border-color: #ffb86c;">
-                                <h3 style="color: #ffb86c;">GATE FLOW ESTIMATE</h3>
-                                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; gap: 12px;">
-                                    <div>
-                                        <p class="stat-value" style="color: #03dac6; margin-bottom: 0;">${gateStats.total_entered}</p>
-                                        <p class="stat-sub" style="margin-top: 0;">Entrance Count</p>
-                                    </div>
-                                    <div style="text-align: center; border-left: 1px solid #444; border-right: 1px solid #444; padding: 0 15px;">
-                                        <p class="stat-value" style="color: #cf6679; margin-bottom: 0;">${gateStats.total_exited}</p>
-                                        <p class="stat-sub" style="margin-top: 0;">Exit Count</p>
-                                    </div>
-                                    <div style="text-align: right;">
-                                        <p class="stat-value" style="color: #ffb86c; margin-bottom: 0;">${gateStats.inside_total}</p>
-                                        <p class="stat-sub" style="margin-top: 0;">Estimated Inside</p>
-                                    </div>
-                                </div>
-                                <p style="color: #888; font-size: 0.85rem; margin-top: 15px;">
-                                    Gate cameras configured: ${gateStats.cameras.length}
-                                </p>
-                             </div>`;
 
                     for (const [groupName, groupData] of Object.entries(groups)) {
                         let isActive  = groupActive[groupName];
@@ -757,11 +754,40 @@
         }, 1000);
 
         // --- 8. CHART.JS HISTORICAL DATA LOGIC ---
-        let campusChartInstance = null;
-        let zoneChartInstances  = {};
+        let campusInChartInstance = null;
+        let campusOutChartInstance = null;
+        let campusInsideChartInstance = null;
         let currentChartData    = null;
         let largeChartInstance  = null;
         let chartUpdateTimer    = null;
+
+        function createHistoryChart(canvasId, label, color, backgroundColor) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: label,
+                        data: [],
+                        borderColor: color,
+                        backgroundColor: backgroundColor,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: '#888' } },
+                        x: { ticks: { color: '#888' } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
 
         function switchDashTab(tab) {
             document.getElementById('tab-live').classList.remove('active');
@@ -787,65 +813,23 @@
                 currentChartData = await res.json();
                 const data       = currentChartData;
 
-                if (!campusChartInstance) {
-                    const ctxCampus     = document.getElementById('campusChart').getContext('2d');
-                    campusChartInstance = new Chart(ctxCampus, {
-                        type: 'line',
-                        data: {
-                            labels: data.labels,
-                            datasets: [{ label: 'Total People Detected', data: data.campus_overview, borderColor: '#03dac6', backgroundColor: 'rgba(3, 218, 198, 0.1)', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }]
-                        },
-                        options: { scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } }, plugins: { legend: { display: false } } }
-                    });
-                } else {
-                    campusChartInstance.data.labels              = data.labels;
-                    campusChartInstance.data.datasets[0].data    = data.campus_overview;
-                    campusChartInstance.update('none');
+                const gateHistory = data.gate_history || { in: [], out: [], inside: [] };
+
+                if (!campusInChartInstance || !campusOutChartInstance || !campusInsideChartInstance) {
+                    campusInChartInstance = createHistoryChart('campusInChart', 'IN Count', '#03dac6', 'rgba(3, 218, 198, 0.12)');
+                    campusOutChartInstance = createHistoryChart('campusOutChart', 'OUT Count', '#cf6679', 'rgba(207, 102, 121, 0.12)');
+                    campusInsideChartInstance = createHistoryChart('campusInsideChart', 'Total Inside Campus', '#ffb86c', 'rgba(255, 184, 108, 0.14)');
                 }
 
-                const zoneContainer = document.getElementById('zone-charts-container');
-
-                if (isInitialLoad) {
-                    zoneContainer.innerHTML = '';
-                    zoneChartInstances      = {};
-
-                    for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
-                        const wrapper  = document.createElement('div');
-                        wrapper.className = 'chart-wrapper zone-chart-card';
-                        wrapper.onclick   = () => openChartModal(zoneName);
-                        const safeId      = zoneName.replace(/\s+/g, '');
-                        wrapper.innerHTML = `<h3 style="color: #bb86fc; margin-top: 0; font-size:1rem;">${zoneName}</h3><canvas id="chart-${safeId}"></canvas>`;
-                        zoneContainer.appendChild(wrapper);
-
-                        const ctxZone = document.getElementById(`chart-${safeId}`).getContext('2d');
-                        zoneChartInstances[zoneName] = new Chart(ctxZone, {
-                            type: 'line',
-                            data: { labels: data.labels, datasets: [{ data: zoneCounts, borderColor: '#bb86fc', borderWidth: 2, tension: 0.3, pointRadius: 0 }] },
-                            options: { scales: { y: { beginAtZero: true, display: false }, x: { display: false } }, plugins: { legend: { display: false } } }
-                        });
-                    }
-                } else {
-                    for (const [zoneName, zoneCounts] of Object.entries(data.zones)) {
-                        if (zoneChartInstances[zoneName]) {
-                            zoneChartInstances[zoneName].data.labels           = data.labels;
-                            zoneChartInstances[zoneName].data.datasets[0].data = zoneCounts;
-                            zoneChartInstances[zoneName].update('none');
-                        } else {
-                            loadCharts(true);
-                            return;
-                        }
-                    }
-                }
-
-                if (document.getElementById('chartModal').classList.contains('show') && largeChartInstance) {
-                    const titleText  = document.getElementById('chartModalTitle').innerText;
-                    const activeZone = titleText.split(" - ")[0];
-                    if (data.zones[activeZone]) {
-                        largeChartInstance.data.labels           = data.labels;
-                        largeChartInstance.data.datasets[0].data = data.zones[activeZone];
-                        largeChartInstance.update('none');
-                    }
-                }
+                [
+                    [campusInChartInstance, gateHistory.in],
+                    [campusOutChartInstance, gateHistory.out],
+                    [campusInsideChartInstance, gateHistory.inside],
+                ].forEach(([chart, values]) => {
+                    chart.data.labels = data.labels;
+                    chart.data.datasets[0].data = values;
+                    chart.update('none');
+                });
             } catch (error) { console.error("Error loading charts", error); }
         }
 

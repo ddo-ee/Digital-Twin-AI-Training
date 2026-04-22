@@ -457,23 +457,20 @@ def register_routes(app, camera_registry):
 
     @app.route("/api/history")
     def get_history():
-        campus_data, zone_data = fetch_history()
+        gate_history = fetch_history()
 
-        labels = [row[0].split(" ")[1] for row in campus_data]
-        campus_counts = [row[1] for row in campus_data]
-
-        zones = {}
-        for row in zone_data:
-            z_name, z_count = row[1], row[2]
-            zones.setdefault(z_name, [])
-            zones[z_name].append(z_count)
-            if len(zones[z_name]) > 20:
-                zones[z_name] = zones[z_name][-20:]
+        labels = [row[0].split(" ")[1] for row in gate_history]
+        total_entered = [row[1] for row in gate_history]
+        total_exited = [row[2] for row in gate_history]
+        inside_total = [row[3] for row in gate_history]
 
         return jsonify({
             "labels": labels,
-            "estimated_campus_overview": campus_counts,
-            "zones": zones,
+            "gate_history": {
+                "in": total_entered,
+                "out": total_exited,
+                "inside": inside_total,
+            },
         })
 
     @app.route("/api/anomalies")

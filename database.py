@@ -58,6 +58,14 @@ def init_db():
                     total_count INTEGER,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"""
             )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS gate_history_logs
+                   (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    total_entered INTEGER DEFAULT 0,
+                    total_exited INTEGER DEFAULT 0,
+                    inside_total INTEGER DEFAULT 0,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"""
+            )
             c.execute("""CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)""")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS camera_rois
@@ -387,7 +395,7 @@ def update_camera(camera_id, clean_name, new_zone=None, new_floor=None):
             conn.commit()
 
 
-def insert_analytics(cameras_snapshot, zone_counts, total_campus):
+def insert_analytics(cameras_snapshot, zone_counts, total_campus, gate_summary=None):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
@@ -406,6 +414,19 @@ def insert_analytics(cameras_snapshot, zone_counts, total_campus):
                 "INSERT INTO campus_logs (total_count, timestamp) VALUES (?, ?)",
                 (total_campus, timestamp),
             )
+            gate_summary = gate_summary or {}
+            c.execute(
+                """
+                INSERT INTO gate_history_logs (total_entered, total_exited, inside_total, timestamp)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    int(gate_summary.get("total_entered", 0)),
+                    int(gate_summary.get("total_exited", 0)),
+                    int(gate_summary.get("inside_total", 0)),
+                    timestamp,
+                ),
+            )
             conn.commit()
 
 
@@ -413,11 +434,16 @@ def fetch_history():
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
-            c.execute("SELECT timestamp, total_count FROM campus_logs ORDER BY id DESC LIMIT 20")
-            campus_data = c.fetchall()[::-1]
-            c.execute("SELECT timestamp, zone_name, count FROM zone_logs ORDER BY id DESC LIMIT 200")
-            zone_data = c.fetchall()[::-1]
-    return campus_data, zone_data
+            c.execute(
+                """
+                SELECT timestamp, total_entered, total_exited, inside_total
+                FROM gate_history_logs
+                ORDER BY id DESC
+                LIMIT 20
+                """
+            )
+            gate_history = c.fetchall()[::-1]
+    return gate_history
 
 
 def insert_anomaly(camera_id, camera_name, zone_name, detected_count, message):

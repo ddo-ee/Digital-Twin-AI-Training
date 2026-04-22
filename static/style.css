@@ -411,6 +411,39 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
     background: rgba(10, 14, 26, 0.8); border: 1px solid #122226;
     border-radius: 12px; padding: 20px; margin-bottom: 20px;
 }
+.history-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+.history-chart-wide {
+    grid-column: 1 / -1;
+}
+.campus-overview-card {
+    grid-column: 1 / -1;
+}
+.campus-gate-summary {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) minmax(220px, 1.4fr) minmax(120px, 1fr);
+    align-items: center;
+    gap: 16px;
+    margin-top: 18px;
+}
+.campus-gate-stat {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.campus-gate-inside {
+    text-align: center;
+    padding: 18px 20px;
+    border-left: 1px solid #2c3444;
+    border-right: 1px solid #2c3444;
+}
+.campus-inside-value {
+    font-size: 4.25rem;
+    line-height: 1;
+}
 .zone-chart-card { transition: 0.3s; cursor: pointer; }
 .zone-chart-card:hover {
     transform: scale(1.03);
@@ -513,5 +546,24 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
 @media (max-width: 960px) {
     .gate-config-layout {
         grid-template-columns: 1fr;
+    }
+    .history-chart-grid {
+        grid-template-columns: 1fr;
+    }
+    .campus-gate-summary {
+        grid-template-columns: 1fr;
+        text-align: center;
+    }
+    .campus-gate-inside {
+        border-left: none;
+        border-right: none;
+        border-top: 1px solid #2c3444;
+        border-bottom: 1px solid #2c3444;
+    }
+    .campus-gate-stat {
+        text-align: center;
+    }
+    .campus-inside-value {
+        font-size: 3.4rem;
     }
 }

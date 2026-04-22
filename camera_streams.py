@@ -248,7 +248,12 @@ def analytics_logger(camera_registry):
             zone_counts[group] += count
 
         try:
-            insert_analytics(cameras_snapshot, zone_counts, total_campus)
+            insert_analytics(
+                cameras_snapshot,
+                zone_counts,
+                total_campus,
+                camera_registry.get_gate_summary(),
+            )
         except Exception as e:
             print(f"Database write error: {e}")
 
