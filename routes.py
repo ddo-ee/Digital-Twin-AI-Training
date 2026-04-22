@@ -58,6 +58,7 @@ def _serialize_gate_config(config, roi_config=None):
             "roi_closed": roi_config.get("roi_closed", True) if roi_config else True,
             "split_x": None,
             "separator_points": [],
+            "camera_role": "entrance",
             "direction": "left_to_right_entry",
         }
 
@@ -75,6 +76,7 @@ def _serialize_gate_config(config, roi_config=None):
         "roi_closed": roi_config.get("roi_closed", config.get("roi_closed", True)) if roi_config else config.get("roi_closed", True),
         "split_x": config.get("split_x"),
         "separator_points": separator_points,
+        "camera_role": config.get("camera_role") or "entrance",
         "direction": config.get("direction") or "left_to_right_entry",
     }
 
@@ -181,6 +183,7 @@ def register_routes(app, camera_registry):
                 "is_active": False,
                 "last_updated": time.time(),
                 "is_gate_camera": False,
+                "gate_role": "",
                 "gate_direction": "",
                 "gate_split_x": None,
                 "roi_points": [],
@@ -253,6 +256,7 @@ def register_routes(app, camera_registry):
         roi_closed = (request.form.get("roi_closed") or "").lower() == "true"
         split_x_raw = request.form.get("split_x", "").strip()
         direction = (request.form.get("direction") or "").strip()
+        camera_role = (request.form.get("camera_role") or "").strip().lower()
         is_gate_camera = (request.form.get("is_gate_camera") or "").lower() == "true"
         existing_config = fetch_gate_config(camera_id)
         existing_roi = fetch_camera_roi(camera_id)
@@ -279,6 +283,8 @@ def register_routes(app, camera_registry):
 
         normalized_separator_points = []
         if is_gate_camera:
+            if camera_role not in {"entrance", "exit"}:
+                return jsonify({"status": "error", "message": "Camera role is invalid."}), 400
             if not isinstance(separator_points, list) or len(separator_points) != 2:
                 return jsonify({"status": "error", "message": "Please plot exactly 2 separator points."}), 400
 
@@ -295,16 +301,10 @@ def register_routes(app, camera_registry):
             if direction not in {"left_to_right_entry", "right_to_left_entry"}:
                 return jsonify({"status": "error", "message": "Direction is invalid."}), 400
         else:
+            camera_role = ""
             direction = ""
 
         split_x = None
-        if is_gate_camera and split_x_raw:
-            try:
-                split_x = int(split_x_raw)
-            except ValueError:
-                return jsonify({"status": "error", "message": "Separator value must be numeric."}), 400
-            if split_x < 0 or split_x > CLICKED_RESOLUTION[0]:
-                return jsonify({"status": "error", "message": "Separator is outside the image width."}), 400
 
         reference_image_path = ""
         if existing_roi:
@@ -341,6 +341,7 @@ def register_routes(app, camera_registry):
                 "roi_closed": roi_closed,
                 "split_x": split_x,
                 "separator_points": normalized_separator_points,
+                "camera_role": camera_role,
                 "direction": direction,
             } if is_gate_camera else None,
         )
@@ -363,6 +364,7 @@ def register_routes(app, camera_registry):
                 "roi_closed": roi_closed,
                 "split_x": split_x,
                 "separator_points": normalized_separator_points,
+                "camera_role": camera_role,
                 "direction": direction,
             }
             upsert_gate_config(
@@ -372,6 +374,7 @@ def register_routes(app, camera_registry):
                 split_x,
                 normalized_separator_points,
                 direction,
+                camera_role,
                 roi_closed,
             )
         else:
@@ -419,6 +422,7 @@ def register_routes(app, camera_registry):
                 "is_active": info.get("is_active", False),
                 "last_updated": info.get("last_updated", time.time()),
                 "is_gate_camera": info.get("is_gate_camera", False),
+                "gate_role": info.get("gate_role", ""),
                 "gate_direction": info.get("gate_direction", ""),
                 "entry_count": info.get("entry_count", 0),
                 "exit_count": info.get("exit_count", 0),
@@ -468,7 +472,7 @@ def register_routes(app, camera_registry):
 
         return jsonify({
             "labels": labels,
-            "campus_overview": campus_counts,
+            "estimated_campus_overview": campus_counts,
             "zones": zones,
         })
 
@@ -534,11 +538,16 @@ def register_routes(app, camera_registry):
 
     @app.route("/api/unity")
     def get_unity_data():
+        gate_summary = camera_registry.get_gate_summary()
         unity_payload = {
-            "campus_overview": {
+            "estimated_campus_overview": {
                 "active_live_people": 0,
                 "total_known_people": 0,
+                "total_entered": gate_summary["total_entered"],
+                "total_exited": gate_summary["total_exited"],
+                "estimated_inside": gate_summary["inside_total"],
             },
+            "gate_summary": gate_summary,
             "zones_list": [],
             "cameras": [],
             "recent_anomalies": [],
@@ -561,9 +570,9 @@ def register_routes(app, camera_registry):
             group = info["group"]
             is_active = info.get("is_active", False)
 
-            unity_payload["campus_overview"]["total_known_people"] += count
+            unity_payload["estimated_campus_overview"]["total_known_people"] += count
             if is_active:
-                unity_payload["campus_overview"]["active_live_people"] += count
+                unity_payload["estimated_campus_overview"]["active_live_people"] += count
 
             zones_temp.setdefault(
                 group,
@@ -585,6 +594,11 @@ def register_routes(app, camera_registry):
                 "floor": info.get("floor", ""),
                 "count": count,
                 "is_active": is_active,
+                "is_gate_camera": info.get("is_gate_camera", False),
+                "gate_role": info.get("gate_role", ""),
+                "gate_direction": info.get("gate_direction", ""),
+                "entry_count": info.get("entry_count", 0),
+                "exit_count": info.get("exit_count", 0),
             })
 
         try:

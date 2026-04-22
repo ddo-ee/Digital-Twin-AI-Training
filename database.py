@@ -99,6 +99,8 @@ def init_db():
                 c.execute("ALTER TABLE gate_configs ADD COLUMN separator_points TEXT")
             if "roi_closed" not in gate_config_columns:
                 c.execute("ALTER TABLE gate_configs ADD COLUMN roi_closed INTEGER DEFAULT 1")
+            if "camera_role" not in gate_config_columns:
+                c.execute("ALTER TABLE gate_configs ADD COLUMN camera_role TEXT DEFAULT 'entrance'")
 
             c.execute("PRAGMA table_info(camera_rois)")
             camera_roi_columns = {row[1] for row in c.fetchall()}
@@ -117,6 +119,13 @@ def init_db():
                 UPDATE gate_configs
                 SET roi_closed = 1
                 WHERE roi_closed IS NULL
+                """
+            )
+            c.execute(
+                """
+                UPDATE gate_configs
+                SET camera_role = 'entrance'
+                WHERE camera_role IS NULL OR TRIM(camera_role) = ''
                 """
             )
 
@@ -183,14 +192,14 @@ def fetch_gate_configs():
             c = conn.cursor()
             c.execute(
                 """
-                SELECT camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed
+                SELECT camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed, camera_role
                 FROM gate_configs
                 """
             )
             rows = c.fetchall()
 
     configs = {}
-    for camera_id, image_path, roi_points, split_x, separator_points, direction, roi_closed in rows:
+    for camera_id, image_path, roi_points, split_x, separator_points, direction, roi_closed, camera_role in rows:
         configs[camera_id] = {
             "camera_id": camera_id,
             "reference_image_path": image_path or "",
@@ -199,6 +208,7 @@ def fetch_gate_configs():
             "separator_points": json.loads(separator_points) if separator_points else [],
             "direction": direction or "",
             "roi_closed": bool(roi_closed),
+            "camera_role": camera_role or "entrance",
         }
     return configs
 
@@ -257,7 +267,7 @@ def fetch_gate_config(camera_id):
             c = conn.cursor()
             c.execute(
                 """
-                SELECT camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed
+                SELECT camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed, camera_role
                 FROM gate_configs
                 WHERE camera_id = ?
                 """,
@@ -276,10 +286,11 @@ def fetch_gate_config(camera_id):
         "separator_points": json.loads(row[4]) if row[4] else [],
         "direction": row[5] or "",
         "roi_closed": bool(row[6]),
+        "camera_role": row[7] or "entrance",
     }
 
 
-def upsert_gate_config(camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed=True):
+def upsert_gate_config(camera_id, reference_image_path, roi_points, split_x, separator_points, direction, camera_role, roi_closed=True):
     roi_points_json = json.dumps(roi_points or [])
     separator_points_json = json.dumps(separator_points or [])
     with db_lock:
@@ -287,8 +298,8 @@ def upsert_gate_config(camera_id, reference_image_path, roi_points, split_x, sep
             c = conn.cursor()
             c.execute(
                 """
-                INSERT INTO gate_configs (camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO gate_configs (camera_id, reference_image_path, roi_points, split_x, separator_points, direction, roi_closed, camera_role, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(camera_id) DO UPDATE SET
                     reference_image_path = excluded.reference_image_path,
                     roi_points = excluded.roi_points,
@@ -296,9 +307,10 @@ def upsert_gate_config(camera_id, reference_image_path, roi_points, split_x, sep
                     separator_points = excluded.separator_points,
                     direction = excluded.direction,
                     roi_closed = excluded.roi_closed,
+                    camera_role = excluded.camera_role,
                     updated_at = excluded.updated_at
                 """,
-                (camera_id, reference_image_path, roi_points_json, split_x, separator_points_json, direction, int(bool(roi_closed)), _ph_now_str()),
+                (camera_id, reference_image_path, roi_points_json, split_x, separator_points_json, direction, int(bool(roi_closed)), camera_role, _ph_now_str()),
             )
             conn.commit()
 

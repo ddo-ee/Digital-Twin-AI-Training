@@ -99,13 +99,18 @@
                     </div>
 
                     <div id="gateCounterFields" style="margin-top: 16px; display: none;">
-                        <label class="gate-config-label">3. Direction</label>
+                        <label class="gate-config-label">3. Camera Role</label>
+                        <select id="gateRoleSelect" class="gate-config-input">
+                            <option value="entrance">Entrance Camera</option>
+                            <option value="exit">Exit Camera</option>
+                        </select>
+                        <label class="gate-config-label" style="margin-top: 16px;">4. Entry Direction</label>
                         <select id="gateDirectionSelect" class="gate-config-input">
                             <option value="left_to_right_entry">Left to Right = Entry</option>
                             <option value="right_to_left_entry">Right to Left = Entry</option>
                         </select>
                         <p style="color: #64748b; font-size: 0.82rem; margin-top: 10px;">
-                            When gate mode is on, place a separator line inside the ROI to split entry and exit.
+                            Draw a separator line, then choose which crossing direction means entry. The selected camera role decides whether this camera records only `IN` or only `OUT`.
                         </p>
                     </div>
 
@@ -633,7 +638,7 @@
 
                     if (badge) {
                         badge.innerText = info.is_gate_camera
-                            ? `People: ${info.count} | IN: ${info.entry_count} | OUT: ${info.exit_count}`
+                            ? formatGateBadge(info)
                             : `People: ${info.count}`;
                     }
                     if (nameSpan) nameSpan.innerText = info.name;
@@ -655,7 +660,7 @@
                         const modalCount = document.getElementById('modalCount');
                         if (modalCount) {
                             modalCount.innerText = info.is_gate_camera
-                                ? `People: ${info.count} | IN: ${info.entry_count} | OUT: ${info.exit_count}`
+                                ? formatGateBadge(info)
                                 : `People: ${info.count}`;
                         }
                     }
@@ -706,11 +711,11 @@
                                 <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; gap: 12px;">
                                     <div>
                                         <p class="stat-value" style="color: #03dac6; margin-bottom: 0;">${gateStats.total_entered}</p>
-                                        <p class="stat-sub" style="margin-top: 0;">Total Entered</p>
+                                        <p class="stat-sub" style="margin-top: 0;">Entrance Count</p>
                                     </div>
                                     <div style="text-align: center; border-left: 1px solid #444; border-right: 1px solid #444; padding: 0 15px;">
                                         <p class="stat-value" style="color: #cf6679; margin-bottom: 0;">${gateStats.total_exited}</p>
-                                        <p class="stat-sub" style="margin-top: 0;">Total Exited</p>
+                                        <p class="stat-sub" style="margin-top: 0;">Exit Count</p>
                                     </div>
                                     <div style="text-align: right;">
                                         <p class="stat-value" style="color: #ffb86c; margin-bottom: 0;">${gateStats.inside_total}</p>
@@ -1098,6 +1103,14 @@
             }
         }
 
+        function formatGateBadge(info) {
+            const gateLabel = info.gate_role === 'exit' ? 'EXIT' : 'ENTRY';
+            const countLabel = info.gate_role === 'exit'
+                ? `OUT: ${info.exit_count}`
+                : `IN: ${info.entry_count}`;
+            return `${gateLabel} Cam | People: ${info.count} | ${countLabel}`;
+        }
+
         const gateCanvas = document.getElementById('gateConfigCanvas');
         const gateCanvasCtx = gateCanvas.getContext('2d');
 
@@ -1114,6 +1127,7 @@
             gateSeparatorPoints = [];
             gateDrawMode = 'roi';
             document.getElementById('gateReferenceImageInput').value = '';
+            document.getElementById('gateRoleSelect').value = 'entrance';
             document.getElementById('gateDirectionSelect').value = 'left_to_right_entry';
             document.getElementById('gateSeparatorValue').innerText = 'Not set';
             // Reset gate counter checkbox and hide its fields
@@ -1139,7 +1153,7 @@
             if (mode === 'roi') {
                 updateGateStatus('ROI Mode: click around the gate area. Leave it open to extend to the bottom edge, or use Close ROI for a closed polygon.');
             } else {
-                updateGateStatus('Separator Mode: click 2 points to draw the left/right divider line inside the ROI.');
+                updateGateStatus('Separator Mode: click 2 points to draw the divider line for crossing detection.');
             }
         }
 
@@ -1250,8 +1264,6 @@
         function clearGateRoi() {
             gateRoiPoints = [];
             gatePolygonClosed = false;
-            gateSeparatorPoints = [];
-            document.getElementById('gateSeparatorValue').innerText = 'Not set';
             redrawGateCanvas();
             updateGateStatus('ROI cleared. Click to plot the area again.');
         }
@@ -1351,6 +1363,7 @@
                 document.getElementById('gateCounterEnabled').checked = isGateCam;
                 document.getElementById('gateCounterFields').style.display = isGateCam ? 'block' : 'none';
 
+                document.getElementById('gateRoleSelect').value = config.camera_role || 'entrance';
                 document.getElementById('gateDirectionSelect').value = config.direction || 'left_to_right_entry';
                 gateRoiPoints = (config.roi_points || []).map(point => ({ x: point.x, y: point.y }));
                 gatePolygonClosed = config.roi_closed === true;
@@ -1397,11 +1410,7 @@
                 return;
             }
 
-            // FIX 1: Correct checkbox ID (was "is_gate_camera", real ID is "gateCounterEnabled")
             const isGate = document.getElementById('gateCounterEnabled').checked;
-
-            // FIX 2 & 3: Correct variable name (was "separatorPoints", real var is "gateSeparatorPoints")
-            //             Correct alert function (was undefined "showError", use "showSystemAlert")
             if (isGate && gateSeparatorPoints.length !== 2) {
                 showSystemAlert('Separator Required', 'Please plot exactly 2 separator points for the gate divider line.');
                 return;
@@ -1415,17 +1424,11 @@
 
             formData.append('roi_points', JSON.stringify(gateRoiPoints));
             formData.append('roi_closed', gatePolygonClosed ? 'true' : 'false');
-
-            // FIX 2: Correct variable name for separator points
             formData.append('separator_points', JSON.stringify(gateSeparatorPoints));
-
-            // FIX 4: Actually send is_gate_camera to the backend (was missing entirely)
             formData.append('is_gate_camera', isGate ? 'true' : 'false');
-
             formData.append('split_x', '');
             formData.append('direction', document.getElementById('gateDirectionSelect').value);
-
-            // FIX 5: Removed dead code "if (separatorPoints.length < 2) { /* blocks submit */ }"
+            formData.append('camera_role', document.getElementById('gateRoleSelect').value);
 
             try {
                 const response = await fetch(`/api/gate_config/${activeGateConfigCamId}`, {

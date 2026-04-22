@@ -59,6 +59,7 @@ class CameraRegistry:
             info = self._cameras[camera_id]
             if gate_config:
                 info["is_gate_camera"] = True
+                info["gate_role"] = gate_config.get("camera_role", "entrance")
                 info["gate_direction"] = gate_config.get("direction", "")
                 info["gate_split_x"] = gate_config.get("split_x")
                 info["gate_separator_points"] = gate_config.get("separator_points", [])
@@ -66,6 +67,7 @@ class CameraRegistry:
                 info["gate_reference_image_path"] = gate_config.get("reference_image_path", "")
             else:
                 info["is_gate_camera"] = False
+                info["gate_role"] = ""
                 info["gate_direction"] = ""
                 info["gate_split_x"] = None
                 info["gate_separator_points"] = []
@@ -98,6 +100,7 @@ class CameraRegistry:
                 configured_cameras.append({
                     "id": cam_id,
                     "name": info.get("name", cam_id),
+                    "camera_role": info.get("gate_role", ""),
                     "direction": info.get("gate_direction", ""),
                     "entry_count": entry_count,
                     "exit_count": exit_count,

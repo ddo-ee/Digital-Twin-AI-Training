@@ -13,7 +13,8 @@ from config import (
     CAMERA_RETRY_DELAY_SECONDS,
     CLICKED_RESOLUTION,
     DETECTION_FRAME_SKIP,
-    GATE_MATCH_DISTANCE_PX,
+    GATE_TRACK_COUNT_COOLDOWN_SECONDS,
+    GATE_TRACK_STALE_SECONDS,
     MODEL_CONFIDENCE,
     MODEL_IMAGE_SIZE,
     MODEL_PATH,
@@ -95,6 +96,7 @@ def _build_gate_camera_defaults(gate_config=None, camera_roi=None):
         "roi_closed": (camera_roi or {}).get("roi_closed", True),
         "reference_image_path": (camera_roi or {}).get("reference_image_path", ""),
         "is_gate_camera": is_gate_camera,
+        "gate_role": gate_config.get("camera_role", "entrance") if is_gate_camera else "",
         "gate_direction": gate_config.get("direction", "") if is_gate_camera else "",
         "gate_split_x": gate_config.get("split_x") if is_gate_camera else None,
         "gate_separator_points": gate_config.get("separator_points", []) if is_gate_camera else [],
@@ -151,56 +153,79 @@ def _resolve_gate_side(point_x, point_y, separator_points):
     return "left" if cross_product < 0 else "right"
 
 
-def _match_gate_points(previous_points, current_point):
-    best_match = None
-    best_distance = None
+def _extract_track_id(box):
+    track_id = getattr(box, "id", None)
+    if track_id is None:
+        return None
 
-    for prev_point in previous_points:
-        dx = current_point["x"] - prev_point["x"]
-        dy = current_point["y"] - prev_point["y"]
-        distance = float(np.hypot(dx, dy))
-
-        if distance > GATE_MATCH_DISTANCE_PX:
-            continue
-
-        if best_distance is None or distance < best_distance:
-            best_distance = distance
-            best_match = prev_point
-
-    return best_match
+    try:
+        if hasattr(track_id, "item"):
+            return int(track_id.item())
+        return int(track_id)
+    except Exception:
+        return None
 
 
-def _update_gate_estimate(camera_id, gate_direction, gate_points, now_ts):
+def _is_entry_crossing(previous_side, current_side, gate_direction):
+    moved_left_to_right = previous_side == "left" and current_side == "right"
+    moved_right_to_left = previous_side == "right" and current_side == "left"
+
+    if gate_direction == "left_to_right_entry":
+        return moved_left_to_right
+    if gate_direction == "right_to_left_entry":
+        return moved_right_to_left
+    return False
+
+
+def _update_gate_estimate(camera_id, gate_role, gate_direction, tracked_points, now_ts):
     runtime = gate_camera_runtime.setdefault(
         camera_id,
         {
-            "previous_points": [],
+            "track_states": {},
         },
     )
-
+    track_states = runtime["track_states"]
     entry_increment = 0
     exit_increment = 0
 
-    for current_point in gate_points:
-        previous_point = _match_gate_points(runtime["previous_points"], current_point)
-        if previous_point is None or previous_point["side"] == current_point["side"]:
-            continue
+    for tracked_point in tracked_points:
+        track_id = tracked_point["track_id"]
+        current_side = tracked_point["side"]
+        state = track_states.get(
+            track_id,
+            {
+                "last_side": current_side,
+                "last_seen": now_ts,
+                "last_counted_at": 0.0,
+            },
+        )
 
-        moved_left_to_right = previous_point["side"] == "left" and current_point["side"] == "right"
-        moved_right_to_left = previous_point["side"] == "right" and current_point["side"] == "left"
+        previous_side = state.get("last_side")
+        crossed_separator = previous_side != current_side
+        cooldown_ready = (now_ts - state.get("last_counted_at", 0.0)) >= GATE_TRACK_COUNT_COOLDOWN_SECONDS
 
-        if gate_direction == "left_to_right_entry":
-            if moved_left_to_right:
+        if crossed_separator and cooldown_ready:
+            is_entry_crossing = _is_entry_crossing(previous_side, current_side, gate_direction)
+            if gate_role == "entrance" and is_entry_crossing:
                 entry_increment += 1
-            elif moved_right_to_left:
+                state["last_counted_at"] = now_ts
+            elif gate_role == "exit" and not is_entry_crossing:
                 exit_increment += 1
-        elif gate_direction == "right_to_left_entry":
-            if moved_right_to_left:
-                entry_increment += 1
-            elif moved_left_to_right:
-                exit_increment += 1
+                state["last_counted_at"] = now_ts
 
-    runtime["previous_points"] = gate_points
+        state["last_side"] = current_side
+        state["last_seen"] = now_ts
+        track_states[track_id] = state
+
+    stale_track_ids = [
+        track_id
+        for track_id, state in track_states.items()
+        if now_ts - state.get("last_seen", now_ts) > GATE_TRACK_STALE_SECONDS
+    ]
+    for track_id in stale_track_ids:
+        track_states.pop(track_id, None)
+
+    runtime["track_states"] = track_states
     return entry_increment, exit_increment
 
 
@@ -235,6 +260,7 @@ def start_analytics_logger(camera_registry):
 def camera_worker(camera_registry, camera_id, source):
     cap = None
     frame_counter = 0
+    tracking_model = None
 
     poly_filename = os.path.join("coordinates", f"{camera_id}_coords.txt")
     fallback_raw_poly = load_poly_from_txt(poly_filename)
@@ -300,43 +326,59 @@ def camera_worker(camera_registry, camera_id, source):
 
         if frame_counter % DETECTION_FRAME_SKIP == 0:
             frame = cv2.resize(frame, PROCESSING_RESOLUTION)
-            with model_lock:
-                results = model(frame, conf=MODEL_CONFIDENCE, imgsz=MODEL_IMAGE_SIZE, verbose=False)
-
-            annotated_frame = frame.copy()
-            person_count = 0
-            gate_points = []
-            gate_direction = cam_info.get("gate_direction", "")
             is_gate_camera = cam_info.get("is_gate_camera", False) and scaled_poly is not None
+            gate_role = cam_info.get("gate_role", "entrance")
+            gate_direction = cam_info.get("gate_direction", "left_to_right_entry")
             gate_separator_points = None
+
             if is_gate_camera:
                 gate_separator_points = _resolve_separator_points(
                     scaled_poly,
                     cam_info.get("gate_separator_points"),
                     cam_info.get("gate_split_x"),
                 )
+                if tracking_model is None:
+                    tracking_model = YOLO(MODEL_PATH, task=MODEL_TASK)
+                results = tracking_model.track(
+                    frame,
+                    conf=MODEL_CONFIDENCE,
+                    imgsz=MODEL_IMAGE_SIZE,
+                    persist=True,
+                    verbose=False,
+                    tracker="bytetrack.yaml",
+                )
+            else:
+                with model_lock:
+                    results = model(frame, conf=MODEL_CONFIDENCE, imgsz=MODEL_IMAGE_SIZE, verbose=False)
+
+            annotated_frame = results[0].plot(labels=False, conf=False)
+            person_count = 0
+            tracked_points = []
 
             for box in results[0].boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 foot_x = int((x1 + x2) / 2)
                 foot_y = int(y2)
+                track_id = _extract_track_id(box)
 
                 if scaled_poly is not None:
                     is_inside = cv2.pointPolygonTest(scaled_poly, (foot_x, foot_y), False)
                     if is_inside >= 0:
                         person_count += 1
-                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.circle(annotated_frame, (foot_x, foot_y), 5, (0, 0, 255), -1)
-                        if is_gate_camera:
+                        if is_gate_camera and track_id is not None:
                             gate_side = _resolve_gate_side(foot_x, foot_y, gate_separator_points)
-                            gate_points.append({
-                                "x": foot_x,
-                                "y": foot_y,
-                                "side": gate_side,
-                            })
+                            tracked_points.append(
+                                {
+                                    "track_id": track_id,
+                                    "x": foot_x,
+                                    "y": foot_y,
+                                    "side": gate_side,
+                                }
+                            )
                             cv2.putText(
                                 annotated_frame,
-                                gate_side.upper(),
+                                f"ID {track_id} {gate_side.upper()}",
                                 (x1, max(20, y1 - 8)),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.45,
@@ -345,7 +387,6 @@ def camera_worker(camera_registry, camera_id, source):
                             )
                 else:
                     person_count += 1
-                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             if scaled_poly is not None:
                 cv2.polylines(
@@ -367,17 +408,23 @@ def camera_worker(camera_registry, camera_id, source):
 
                 entry_increment, exit_increment = _update_gate_estimate(
                     camera_id,
+                    gate_role,
                     gate_direction,
-                    gate_points,
+                    tracked_points,
                     time.time(),
                 )
                 if entry_increment or exit_increment:
                     camera_registry.update_gate_totals(camera_id, entry_increment, exit_increment)
 
                 updated_info = camera_registry.get(camera_id) or cam_info
+                count_text = (
+                    f"ENTRY CAM | IN {updated_info.get('entry_count', 0)}"
+                    if gate_role == "entrance"
+                    else f"EXIT CAM | OUT {updated_info.get('exit_count', 0)}"
+                )
                 cv2.putText(
                     annotated_frame,
-                    f"IN {updated_info.get('entry_count', 0)} | OUT {updated_info.get('exit_count', 0)}",
+                    count_text,
                     (12, 28),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
