@@ -1,9 +1,9 @@
 # --- Ignore the Dataset Images & Labels ---
 # This assumes your data is in a folder named 'datasets' or similar
 datasets/
-*.jpg
-*.jpeg
-*.png
+# *.jpg
+# *.jpeg
+# *.png
 *.mp4
 *.mkv
 *.ini
