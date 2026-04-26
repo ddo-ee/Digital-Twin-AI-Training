@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 
-from config import DB_NAME, DEFAULT_ZONES
+from config import ANALYTICS_LOG_INTERVAL_SECONDS, DB_NAME, DEFAULT_ZONES
 
 db_lock = Lock()
 PH_TIMEZONE = timezone(timedelta(hours=8))
@@ -15,6 +15,136 @@ def _ph_now_str():
 
 def _ph_cutoff_str(window_seconds):
     return (datetime.now(PH_TIMEZONE) - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _ph_today_str():
+    return datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d")
+
+
+def _parse_history_datetime(value):
+    if not value:
+        return None
+
+    normalized = value.strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _floor_to_hour(value):
+    if value is None:
+        return None
+    return value.replace(minute=0, second=0, microsecond=0)
+
+
+def _floor_to_minute(value):
+    if value is None:
+        return None
+    return value.replace(second=0, microsecond=0)
+
+
+def _floor_to_day(value):
+    if value is None:
+        return None
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _history_bucket_strategy(start_dt, end_dt, range_key):
+    if start_dt is None or end_dt is None:
+        return ("hour", "%Y-%m-%d %H:00:00")
+
+    window = end_dt - start_dt
+    if window <= timedelta(hours=12):
+        return ("raw", None)
+    if window <= timedelta(days=2):
+        return ("minute", "%Y-%m-%d %H:%M:00")
+    if window <= timedelta(days=14):
+        return ("hour", "%Y-%m-%d %H:00:00")
+    return ("day", "%Y-%m-%d 00:00:00")
+
+
+def _parse_db_timestamp(value):
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def _floor_to_interval(value, interval_seconds):
+    if value is None:
+        return None
+
+    midnight = value.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed_seconds = int((value - midnight).total_seconds())
+    floored_seconds = elapsed_seconds - (elapsed_seconds % interval_seconds)
+    return midnight + timedelta(seconds=floored_seconds)
+
+
+def _fill_raw_history(rows, start_dt, end_dt):
+    if start_dt is None or end_dt is None:
+        return rows
+
+    interval_seconds = max(1, int(ANALYTICS_LOG_INTERVAL_SECONDS))
+    range_start = _floor_to_hour(start_dt)
+    range_end = _floor_to_interval(end_dt, interval_seconds)
+
+    rows_by_bucket = {}
+    for timestamp, total_entered, total_exited, inside_total in rows:
+        bucket_dt = _floor_to_interval(_parse_db_timestamp(timestamp), interval_seconds)
+        bucket_key = bucket_dt.strftime("%Y-%m-%d %H:%M:%S")
+        rows_by_bucket[bucket_key] = (bucket_key, int(total_entered), int(total_exited), int(inside_total))
+
+    filled_rows = []
+    current_dt = range_start
+    while current_dt <= range_end:
+        bucket_key = current_dt.strftime("%Y-%m-%d %H:%M:%S")
+        filled_rows.append(rows_by_bucket.get(bucket_key, (bucket_key, 0, 0, 0)))
+        current_dt += timedelta(seconds=interval_seconds)
+
+    return filled_rows
+
+
+def _history_bucket_step(bucket_mode):
+    if bucket_mode == "minute":
+        return timedelta(minutes=1)
+    if bucket_mode == "hour":
+        return timedelta(hours=1)
+    if bucket_mode == "day":
+        return timedelta(days=1)
+    return timedelta(seconds=max(1, int(ANALYTICS_LOG_INTERVAL_SECONDS)))
+
+
+def _floor_history_bucket(value, bucket_mode):
+    if bucket_mode == "minute":
+        return _floor_to_minute(value)
+    if bucket_mode == "hour":
+        return _floor_to_hour(value)
+    if bucket_mode == "day":
+        return _floor_to_day(value)
+    return _floor_to_interval(value, max(1, int(ANALYTICS_LOG_INTERVAL_SECONDS)))
+
+
+def _fill_bucketed_history(rows, start_dt, end_dt, bucket_mode):
+    if start_dt is None or end_dt is None:
+        return rows
+
+    range_start = _floor_history_bucket(start_dt, bucket_mode)
+    range_end = _floor_history_bucket(end_dt, bucket_mode)
+    step = _history_bucket_step(bucket_mode)
+
+    rows_by_bucket = {
+        row[0]: (row[0], int(row[1]), int(row[2]), int(row[3]))
+        for row in rows
+    }
+
+    filled_rows = []
+    current_dt = range_start
+    while current_dt <= range_end:
+        bucket_key = current_dt.strftime("%Y-%m-%d %H:%M:%S")
+        filled_rows.append(rows_by_bucket.get(bucket_key, (bucket_key, 0, 0, 0)))
+        current_dt += step
+
+    return filled_rows
 
 
 def init_db():
@@ -65,6 +195,18 @@ def init_db():
                     total_exited INTEGER DEFAULT 0,
                     inside_total INTEGER DEFAULT 0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"""
+            )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS gate_counter_states
+                   (
+                        camera_id TEXT,
+                        count_date TEXT,
+                        entry_count INTEGER DEFAULT 0,
+                        exit_count INTEGER DEFAULT 0,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (camera_id, count_date),
+                        FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
+                   )"""
             )
             c.execute("""CREATE TABLE IF NOT EXISTS zones (name TEXT PRIMARY KEY)""")
             c.execute(
@@ -219,6 +361,65 @@ def fetch_gate_configs():
             "camera_role": camera_role or "entrance",
         }
     return configs
+
+
+def fetch_gate_counter_states(count_date=None):
+    target_date = count_date or _ph_today_str()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT camera_id, entry_count, exit_count
+                FROM gate_counter_states
+                WHERE count_date = ?
+                """,
+                (target_date,),
+            )
+            rows = c.fetchall()
+
+    return {
+        camera_id: {
+            "entry_count": int(entry_count or 0),
+            "exit_count": int(exit_count or 0),
+        }
+        for camera_id, entry_count, exit_count in rows
+    }
+
+
+def upsert_gate_counter_state(camera_id, entry_count, exit_count, count_date=None):
+    target_date = count_date or _ph_today_str()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                INSERT INTO gate_counter_states (camera_id, count_date, entry_count, exit_count, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(camera_id, count_date) DO UPDATE SET
+                    entry_count = excluded.entry_count,
+                    exit_count = excluded.exit_count,
+                    updated_at = excluded.updated_at
+                """,
+                (camera_id, target_date, int(entry_count), int(exit_count), _ph_now_str()),
+            )
+            conn.commit()
+
+
+def delete_gate_counter_state(camera_id, count_date=None):
+    target_date = count_date or _ph_today_str()
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                DELETE FROM gate_counter_states
+                WHERE camera_id = ?
+                  AND count_date = ?
+                """,
+                (camera_id, target_date),
+            )
+            conn.commit()
 
 
 def fetch_camera_rois():
@@ -430,20 +631,88 @@ def insert_analytics(cameras_snapshot, zone_counts, total_campus, gate_summary=N
             conn.commit()
 
 
-def fetch_history():
+def fetch_history(range_key="10h", start=None, end=None):
+    range_map = {
+        "10h": timedelta(hours=10),
+        "24h": timedelta(hours=24),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
+    start_dt = _parse_history_datetime(start)
+    end_dt = _parse_history_datetime(end)
+
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
+            if end_dt is None:
+                if range_key == "all" and start_dt is None:
+                    c.execute("SELECT MAX(timestamp) FROM gate_history_logs")
+                    max_timestamp = c.fetchone()[0]
+                    end_dt = _parse_db_timestamp(max_timestamp) if max_timestamp else datetime.now(PH_TIMEZONE).replace(tzinfo=None)
+                else:
+                    end_dt = datetime.now(PH_TIMEZONE).replace(tzinfo=None)
+
+            if start_dt is None:
+                if range_key in range_map:
+                    start_dt = end_dt - range_map[range_key]
+                elif range_key == "all":
+                    c.execute("SELECT MIN(timestamp) FROM gate_history_logs")
+                    min_timestamp = c.fetchone()[0]
+                    start_dt = _parse_db_timestamp(min_timestamp) if min_timestamp else end_dt
+
+            where_clauses = []
+            params = []
+            if start_dt is not None:
+                where_clauses.append("timestamp >= ?")
+                params.append(start_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            if end_dt is not None:
+                where_clauses.append("timestamp <= ?")
+                params.append(end_dt.strftime("%Y-%m-%d %H:%M:%S"))
+
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
+
+            bucket_mode, bucket_format = _history_bucket_strategy(start_dt, end_dt, range_key)
+
+            if bucket_mode == "raw":
+                c.execute(
+                    f"""
+                    SELECT timestamp, total_entered, total_exited, inside_total
+                    FROM gate_history_logs
+                    {where_sql}
+                    ORDER BY timestamp ASC, id ASC
+                    """,
+                    params,
+                )
+                raw_rows = [
+                    (row[0], int(row[1]), int(row[2]), int(row[3]))
+                    for row in c.fetchall()
+                ]
+                return _fill_raw_history(raw_rows, start_dt, end_dt)
+
             c.execute(
-                """
-                SELECT timestamp, total_entered, total_exited, inside_total
-                FROM gate_history_logs
-                ORDER BY id DESC
-                LIMIT 20
-                """
+                f"""
+                WITH ranged_latest AS (
+                    SELECT
+                        strftime('{bucket_format}', timestamp) AS time_bucket,
+                        MAX(id) AS latest_id
+                    FROM gate_history_logs
+                    {where_sql}
+                    GROUP BY time_bucket
+                )
+                SELECT rl.time_bucket, ghl.total_entered, ghl.total_exited, ghl.inside_total
+                FROM ranged_latest rl
+                JOIN gate_history_logs ghl ON ghl.id = rl.latest_id
+                ORDER BY rl.time_bucket ASC
+                """,
+                params,
             )
-            gate_history = c.fetchall()[::-1]
-    return gate_history
+            bucketed_rows = [
+                (row[0], int(row[1]), int(row[2]), int(row[3]))
+                for row in c.fetchall()
+            ]
+            return _fill_bucketed_history(bucketed_rows, start_dt, end_dt, bucket_mode)
 
 
 def insert_anomaly(camera_id, camera_name, zone_name, detected_count, message):

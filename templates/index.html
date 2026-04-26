@@ -272,6 +272,44 @@
                 </div>
 
                 <div id="dashboard-charts" style="display: none;">
+                    <div class="chart-wrapper" style="margin-bottom: 18px;">
+                        <div style="display:flex; gap:12px; align-items:end; flex-wrap:wrap;">
+                            <div>
+                                <label style="display:block; color:#94a3b8; font-size:0.8rem; margin-bottom:6px;">Download Range</label>
+                                <select id="historyRangeSelect" class="gate-config-input" style="min-width: 180px;" onchange="onHistoryRangeChange()">
+                                    <option value="24h" selected>Last 24 Hours</option>
+                                    <option value="10h">Last 10 Hours</option>
+                                    <option value="7d">Last 7 Days</option>
+                                    <option value="30d">Last 30 Days</option>
+                                    <option value="all">All Data</option>
+                                    <option value="custom">Custom Range</option>
+                                </select>
+                            </div>
+                            <div id="historyCustomRangeFields" style="display:none; gap:12px; align-items:end; flex-wrap:wrap;">
+                                <div>
+                                    <label style="display:block; color:#94a3b8; font-size:0.8rem; margin-bottom:6px;">Start</label>
+                                    <input type="datetime-local" id="historyStartInput" class="gate-config-input">
+                                </div>
+                                <div>
+                                    <label style="display:block; color:#94a3b8; font-size:0.8rem; margin-bottom:6px;">End</label>
+                                    <input type="datetime-local" id="historyEndInput" class="gate-config-input">
+                                </div>
+                            </div>
+                            <button onclick="loadCharts(true)" style="background:#222; color:#03dac6; border:1px solid #03dac6; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Refresh 24h Charts
+                            </button>
+                            <button onclick="downloadHistoryCsv()" style="background:#222; color:#ffb86c; border:1px solid #ffb86c; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Download CSV
+                            </button>
+                            <button onclick="downloadHistoryChartsPng()" style="background:#222; color:#8be9fd; border:1px solid #8be9fd; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Download Graph
+                            </button>
+                            <button onclick="downloadHistoryDataAndGraph()" style="background:#222; color:#50fa7b; border:1px solid #50fa7b; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Download Both
+                            </button>
+                        </div>
+                        <p style="color:#64748b; font-size:0.82rem; margin:10px 0 0;">Historical charts on the dashboard always show the last 24 hours. The range selector is used only for downloads.</p>
+                    </div>
                     <div class="history-chart-grid">
                         <div class="chart-wrapper">
                             <h3 style="color: #03dac6; margin-top: 0;">Campus Overview: Entrance</h3>
@@ -786,16 +824,119 @@
         let currentChartData    = null;
         let largeChartInstance  = null;
         let chartUpdateTimer    = null;
+        const DISPLAY_HISTORY_RANGE = '24h';
+        const HISTORICAL_CHART_REFRESH_INTERVAL_MS = {{ historical_chart_refresh_interval_ms|int }};
 
-        function createHistoryChart(canvasId, label, color, backgroundColor) {
-            const ctx = document.getElementById(canvasId).getContext('2d');
-            return new Chart(ctx, {
+        function onHistoryRangeChange() {
+            const isCustom = document.getElementById('historyRangeSelect').value === 'custom';
+            document.getElementById('historyCustomRangeFields').style.display = isCustom ? 'flex' : 'none';
+        }
+
+        function getDownloadHistoryQueryString() {
+            const rangeValue = document.getElementById('historyRangeSelect').value;
+            const params = new URLSearchParams();
+            params.set('range', rangeValue);
+
+            if (rangeValue === 'custom') {
+                const startValue = document.getElementById('historyStartInput').value;
+                const endValue = document.getElementById('historyEndInput').value;
+                if (startValue) params.set('start', startValue);
+                if (endValue) params.set('end', endValue);
+            }
+
+            return params.toString();
+        }
+
+        function getDisplayHistoryQueryString() {
+            const params = new URLSearchParams();
+            params.set('range', DISPLAY_HISTORY_RANGE);
+            return params.toString();
+        }
+
+        function downloadHistoryCsv() {
+            const query = getDownloadHistoryQueryString();
+            window.location.href = `/api/history/export?${query}`;
+        }
+
+        function getHistoryDownloadSuffix() {
+            const rangeValue = document.getElementById('historyRangeSelect').value;
+            if (rangeValue !== 'custom') return rangeValue;
+
+            const startValue = document.getElementById('historyStartInput').value || 'custom-start';
+            const endValue = document.getElementById('historyEndInput').value || 'custom-end';
+            return `${startValue}_${endValue}`.replace(/[^a-zA-Z0-9_-]+/g, '-');
+        }
+
+        function triggerFileDownload(dataUrl, filename) {
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function getSelectedHistoryRange() {
+            return document.getElementById('historyRangeSelect').value;
+        }
+
+        function getHistoryLabelMode(rangeValue, labels = []) {
+            if (rangeValue === '7d' || rangeValue === '30d' || rangeValue === 'all') {
+                return 'day';
+            }
+
+            if (rangeValue === 'custom' && labels.length >= 2) {
+                const startLabel = labels[0];
+                const endLabel = labels[labels.length - 1];
+                if (startLabel && endLabel) {
+                    const startDate = new Date(startLabel.replace(' ', 'T'));
+                    const endDate = new Date(endLabel.replace(' ', 'T'));
+                    if (!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
+                        const rangeMs = endDate.getTime() - startDate.getTime();
+                        if (rangeMs >= (7 * 24 * 60 * 60 * 1000)) {
+                            return 'day';
+                        }
+                    }
+                }
+            }
+
+            return 'hour';
+        }
+
+        async function ensureHistoryChartsLoaded() {
+            if (!currentChartData) {
+                await loadCharts(true);
+            }
+
+            return currentChartData && Array.isArray(currentChartData.labels) && currentChartData.labels.length > 0;
+        }
+
+        async function fetchHistoryDataForRange(queryString) {
+            const response = await fetch(`/api/history?${queryString}`);
+            return await response.json();
+        }
+
+        function createExportSourceCanvas(width = 1200, height = 320) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            return canvas;
+        }
+
+        function buildHistoryChartConfig(label, color, backgroundColor, labels, values, axisOptions = {}) {
+            const {
+                labelMode = 'hour',
+                slantedTicks = false,
+                responsive = true,
+            } = axisOptions;
+
+            return {
                 type: 'line',
                 data: {
-                    labels: [],
+                    labels: labels,
                     datasets: [{
                         label: label,
-                        data: [],
+                        data: values,
                         borderColor: color,
                         backgroundColor: backgroundColor,
                         borderWidth: 2,
@@ -805,14 +946,197 @@
                     }]
                 },
                 options: {
-                    responsive: true,
+                    responsive: responsive,
+                    animation: false,
                     scales: {
                         y: { beginAtZero: true, ticks: { color: '#888' } },
-                        x: { ticks: { color: '#888' } }
+                        x: {
+                            ticks: {
+                                color: '#888',
+                                autoSkip: false,
+                                maxRotation: slantedTicks ? 35 : 0,
+                                minRotation: slantedTicks ? 35 : 0,
+                                callback: function(value) {
+                                    const tickLabel = this.getLabelForValue(value);
+                                    if (!tickLabel) return '';
+                                    if (!shouldShowHistoryBoundaryLabel(this.chart.data.labels, value, labelMode)) return '';
+                                    return formatHistoryAxisLabel(tickLabel, labelMode);
+                                }
+                            }
+                        },
                     },
-                    plugins: { legend: { display: false } }
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                title: function(items) {
+                                    return items[0]?.label || '';
+                                }
+                            }
+                        }
+                    },
                 }
+            };
+        }
+
+        async function buildHistoryExportImage(queryString, rangeValue) {
+            const exportData = await fetchHistoryDataForRange(queryString);
+            if (!exportData || !Array.isArray(exportData.labels) || !exportData.labels.length) {
+                return null;
+            }
+
+            const labelMode = getHistoryLabelMode(rangeValue, exportData.labels);
+            const gateHistory = exportData.gate_history || { in: [], out: [], inside: [] };
+            const exportSources = [
+                {
+                    title: 'Campus Overview: Entrance',
+                    chartLabel: 'IN Count',
+                    color: '#03dac6',
+                    backgroundColor: 'rgba(3, 218, 198, 0.12)',
+                    values: gateHistory.in,
+                    slantedTicks: labelMode === 'hour',
+                },
+                {
+                    title: 'Campus Overview: Exit',
+                    chartLabel: 'OUT Count',
+                    color: '#cf6679',
+                    backgroundColor: 'rgba(207, 102, 121, 0.12)',
+                    values: gateHistory.out,
+                    slantedTicks: labelMode === 'hour',
+                },
+                {
+                    title: 'Campus Population Trend',
+                    chartLabel: 'Total Inside Campus',
+                    color: '#ffb86c',
+                    backgroundColor: 'rgba(255, 184, 108, 0.14)',
+                    values: gateHistory.inside,
+                    slantedTicks: false,
+                },
+            ];
+
+            const renderedCharts = exportSources.map((source) => {
+                const canvas = createExportSourceCanvas(1200, 320);
+                const ctx = canvas.getContext('2d');
+                const chart = new Chart(
+                    ctx,
+                    buildHistoryChartConfig(
+                        source.chartLabel,
+                        source.color,
+                        source.backgroundColor,
+                        exportData.labels,
+                        source.values,
+                        { labelMode, slantedTicks: source.slantedTicks, responsive: false }
+                    )
+                );
+                return { title: source.title, canvas, chart };
             });
+
+            await new Promise(resolve => window.setTimeout(resolve, 0));
+
+            const padding = 28;
+            const gap = 24;
+            const headerHeight = 60;
+            const sectionTitleHeight = 26;
+            const footerHeight = 24;
+            const exportWidth = Math.max(...renderedCharts.map(entry => entry.canvas.width)) + (padding * 2);
+            const exportHeight = headerHeight
+                + footerHeight
+                + renderedCharts.reduce((total, entry) => total + sectionTitleHeight + entry.canvas.height, 0)
+                + (gap * Math.max(renderedCharts.length - 1, 0))
+                + (padding * 2);
+
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = exportWidth;
+            exportCanvas.height = exportHeight;
+
+            const ctx = exportCanvas.getContext('2d');
+            ctx.fillStyle = '#111827';
+            ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+            ctx.fillStyle = '#f8fafc';
+            ctx.font = 'bold 28px Arial';
+            ctx.fillText('Campus Historical Charts', padding, padding + 18);
+
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = '16px Arial';
+            ctx.fillText(`Range: ${document.getElementById('historyRangeSelect').selectedOptions[0].text}`, padding, padding + 44);
+
+            let offsetY = padding + headerHeight;
+            renderedCharts.forEach((entry) => {
+                ctx.fillStyle = '#e2e8f0';
+                ctx.font = 'bold 18px Arial';
+                ctx.fillText(entry.title, padding, offsetY);
+                offsetY += sectionTitleHeight;
+                ctx.drawImage(entry.canvas, padding, offsetY);
+                offsetY += entry.canvas.height + gap;
+            });
+
+            ctx.fillStyle = '#64748b';
+            ctx.font = '14px Arial';
+            ctx.fillText(`Generated: ${new Date().toLocaleString()}`, padding, exportCanvas.height - padding);
+
+            renderedCharts.forEach((entry) => entry.chart.destroy());
+            return exportCanvas.toDataURL('image/png');
+        }
+
+        async function downloadHistoryChartsPng() {
+            const queryString = getDownloadHistoryQueryString();
+            const rangeValue = getSelectedHistoryRange();
+            const exportImageData = await buildHistoryExportImage(queryString, rangeValue);
+
+            if (!exportImageData) {
+                if (typeof showSystemAlert === 'function') {
+                    showSystemAlert('No History Data', 'Load a chart range with available data before downloading the graph.');
+                }
+                return;
+            }
+
+            triggerFileDownload(exportImageData, `gate-history-charts-${getHistoryDownloadSuffix()}.png`);
+        }
+
+        async function downloadHistoryDataAndGraph() {
+            downloadHistoryCsv();
+            window.setTimeout(() => {
+                downloadHistoryChartsPng();
+            }, 300);
+        }
+
+        function formatHistoryAxisHour(label) {
+            if (!label) return '';
+
+            const parts = label.split(' ');
+            if (parts.length < 2) return label;
+
+            const hour = parts[1].split(':')[0];
+            return `${hour}:00`;
+        }
+
+        function formatHistoryAxisDay(label) {
+            if (!label) return '';
+
+            const parts = label.split(' ');
+            return parts[0] || label;
+        }
+
+        function formatHistoryAxisLabel(label, labelMode = 'hour') {
+            if (labelMode === 'day') return formatHistoryAxisDay(label);
+            return formatHistoryAxisHour(label);
+        }
+
+        function shouldShowHistoryBoundaryLabel(labels, index, labelMode = 'hour') {
+            if (!Array.isArray(labels) || index < 0 || index >= labels.length) return false;
+
+            const currentLabel = labels[index];
+            if (!currentLabel) return false;
+            if (index === 0) return true;
+
+            const previousLabel = labels[index - 1];
+            return formatHistoryAxisLabel(currentLabel, labelMode) !== formatHistoryAxisLabel(previousLabel, labelMode);
+        }
+
+        function createHistoryChart(canvasId, label, color, backgroundColor, axisOptions = {}) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, buildHistoryChartConfig(label, color, backgroundColor, [], [], axisOptions));
         }
 
         function switchDashTab(tab) {
@@ -829,22 +1153,22 @@
                 document.getElementById('dashboard-charts').style.display = 'block';
                 loadCharts(true);
                 if (chartUpdateTimer) clearInterval(chartUpdateTimer);
-                chartUpdateTimer = setInterval(() => loadCharts(false), 5000);
+                chartUpdateTimer = setInterval(() => loadCharts(false), HISTORICAL_CHART_REFRESH_INTERVAL_MS);
             }
         }
 
         async function loadCharts(isInitialLoad = false) {
             try {
-                const res        = await fetch('/api/history');
+                const res        = await fetch(`/api/history?${getDisplayHistoryQueryString()}`);
                 currentChartData = await res.json();
                 const data       = currentChartData;
 
                 const gateHistory = data.gate_history || { in: [], out: [], inside: [] };
 
                 if (!campusInChartInstance || !campusOutChartInstance || !campusInsideChartInstance) {
-                    campusInChartInstance = createHistoryChart('campusInChart', 'IN Count', '#03dac6', 'rgba(3, 218, 198, 0.12)');
-                    campusOutChartInstance = createHistoryChart('campusOutChart', 'OUT Count', '#cf6679', 'rgba(207, 102, 121, 0.12)');
-                    campusInsideChartInstance = createHistoryChart('campusInsideChart', 'Total Inside Campus', '#ffb86c', 'rgba(255, 184, 108, 0.14)');
+                    campusInChartInstance = createHistoryChart('campusInChart', 'IN Count', '#03dac6', 'rgba(3, 218, 198, 0.12)', { labelMode: 'hour', slantedTicks: true });
+                    campusOutChartInstance = createHistoryChart('campusOutChart', 'OUT Count', '#cf6679', 'rgba(207, 102, 121, 0.12)', { labelMode: 'hour', slantedTicks: true });
+                    campusInsideChartInstance = createHistoryChart('campusInsideChart', 'Total Inside Campus', '#ffb86c', 'rgba(255, 184, 108, 0.14)', { labelMode: 'hour', slantedTicks: false });
                 }
 
                 [

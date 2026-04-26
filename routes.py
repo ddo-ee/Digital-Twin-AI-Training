@@ -1,6 +1,8 @@
 import os
 import time
 import uuid
+import csv
+import io
 
 from flask import Response, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.utils import secure_filename
@@ -11,6 +13,7 @@ from config import (
     CLICKED_RESOLUTION,
     FLOOR_OPTIONS_BY_ZONE,
     GATE_CONFIG_UPLOAD_DIR,
+    HISTORICAL_CHART_REFRESH_INTERVAL_MS,
     LOGIN_PASSWORD,
     LOGIN_USERNAME,
     UNITY_ANOMALY_WINDOW_SECONDS,
@@ -19,6 +22,7 @@ from config import (
 from database import (
     add_zone,
     delete_camera_roi,
+    delete_gate_counter_state,
     delete_camera,
     delete_gate_config,
     dismiss_all_anomalies,
@@ -86,6 +90,14 @@ def _allowed_gate_image(filename):
     return ext in {".jpg", ".jpeg", ".png", ".webp"}
 
 
+def _history_query_args():
+    return {
+        "range_key": (request.args.get("range") or "10h").strip().lower(),
+        "start": (request.args.get("start") or "").strip(),
+        "end": (request.args.get("end") or "").strip(),
+    }
+
+
 def register_routes(app, camera_registry):
     @app.before_request
     def require_login():
@@ -137,6 +149,7 @@ def register_routes(app, camera_registry):
             cameras=camera_registry.snapshot(),
             clicked_resolution=CLICKED_RESOLUTION,
             floor_options_by_zone=FLOOR_OPTIONS_BY_ZONE,
+            historical_chart_refresh_interval_ms=HISTORICAL_CHART_REFRESH_INTERVAL_MS,
             all_zones=fetch_zones(order_by_name=True),
         )
 
@@ -201,6 +214,7 @@ def register_routes(app, camera_registry):
         if camera_registry.has(camera_id):
             stop_camera_thread(camera_id)
             camera_registry.remove(camera_id)
+            delete_gate_counter_state(camera_id)
             delete_gate_config(camera_id)
             delete_camera(camera_id)
         return redirect(url_for("index"))
@@ -382,6 +396,7 @@ def register_routes(app, camera_registry):
             delete_gate_config(camera_id)
 
         camera_registry.reset_gate_totals(camera_id)
+        delete_gate_counter_state(camera_id)
         serialized_config = _serialize_gate_config(
             {"camera_id": camera_id, **(gate_config or {})} if gate_config else None,
             {"camera_id": camera_id, "reference_image_path": reference_image_path, "roi_points": normalized_roi_points, "roi_closed": roi_closed},
@@ -395,6 +410,7 @@ def register_routes(app, camera_registry):
 
         delete_gate_config(camera_id)
         delete_camera_roi(camera_id)
+        delete_gate_counter_state(camera_id)
         camera_registry.set_gate_config(camera_id, None)
         camera_registry.reset_gate_totals(camera_id)
         current_info = camera_registry.get(camera_id)
@@ -463,9 +479,9 @@ def register_routes(app, camera_registry):
 
     @app.route("/api/history")
     def get_history():
-        gate_history = fetch_history()
+        gate_history = fetch_history(**_history_query_args())
 
-        labels = [row[0].split(" ")[1] for row in gate_history]
+        labels = [row[0] for row in gate_history]
         total_entered = [row[1] for row in gate_history]
         total_exited = [row[2] for row in gate_history]
         inside_total = [row[3] for row in gate_history]
@@ -478,6 +494,24 @@ def register_routes(app, camera_registry):
                 "inside": inside_total,
             },
         })
+
+    @app.route("/api/history/export")
+    def export_history():
+        gate_history = fetch_history(**_history_query_args())
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["timestamp", "total_entered", "total_exited", "inside_total"])
+        for timestamp, total_entered, total_exited, inside_total in gate_history:
+            writer.writerow([timestamp, total_entered, total_exited, inside_total])
+
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=gate-history.csv",
+            },
+        )
 
     @app.route("/api/anomalies")
     def get_anomalies():

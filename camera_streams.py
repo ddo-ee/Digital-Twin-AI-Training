@@ -25,7 +25,14 @@ from config import (
     STREAM_FRAME_DELAY_SECONDS,
     WORKER_LOOP_DELAY_SECONDS,
 )
-from database import fetch_camera_rois, fetch_cameras, fetch_gate_configs, insert_analytics
+from database import (
+    fetch_camera_rois,
+    fetch_cameras,
+    fetch_gate_configs,
+    fetch_gate_counter_states,
+    insert_analytics,
+    upsert_gate_counter_state,
+)
 
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = OPENCV_FFMPEG_CAPTURE_OPTIONS
@@ -135,6 +142,34 @@ def _build_default_separator_points(scaled_poly, configured_split_x=None):
         {"x": split_x, "y": min_y},
         {"x": split_x, "y": max_y},
     ]
+
+
+def _draw_text_with_background(
+    frame,
+    text,
+    origin,
+    font,
+    font_scale,
+    text_color,
+    thickness,
+    background_color=(0, 0, 0),
+    padding=6,
+):
+    text_size, baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    text_width, text_height = text_size
+    x, y = origin
+
+    rect_top_left = (
+        max(0, x - padding),
+        max(0, y - text_height - padding),
+    )
+    rect_bottom_right = (
+        min(frame.shape[1] - 1, x + text_width + padding),
+        min(frame.shape[0] - 1, y + baseline + padding),
+    )
+
+    cv2.rectangle(frame, rect_top_left, rect_bottom_right, background_color, -1)
+    cv2.putText(frame, text, origin, font, font_scale, text_color, thickness)
 
 
 def _resolve_separator_points(scaled_poly, separator_points=None, configured_split_x=None):
@@ -254,6 +289,18 @@ def analytics_logger(camera_registry):
                 total_campus,
                 camera_registry.get_gate_summary(),
             )
+
+            # Persist the latest gate camera totals on every analytics cycle so
+            # restarts can recover even if no new crossing happens right before shutdown.
+            for camera_id, info in cameras_snapshot.items():
+                if not info.get("is_gate_camera", False):
+                    continue
+
+                upsert_gate_counter_state(
+                    camera_id,
+                    info.get("entry_count", 0),
+                    info.get("exit_count", 0),
+                )
         except Exception as e:
             print(f"Database write error: {e}")
 
@@ -425,7 +472,13 @@ def camera_worker(camera_registry, camera_id, source):
                     time.time(),
                 )
                 if entry_increment or exit_increment:
-                    camera_registry.update_gate_totals(camera_id, entry_increment, exit_increment)
+                    updated_totals = camera_registry.update_gate_totals(camera_id, entry_increment, exit_increment)
+                    if updated_totals:
+                        upsert_gate_counter_state(
+                            camera_id,
+                            updated_totals.get("entry_count", 0),
+                            updated_totals.get("exit_count", 0),
+                        )
 
                 updated_info = camera_registry.get(camera_id) or cam_info
                 count_text = (
@@ -433,7 +486,7 @@ def camera_worker(camera_registry, camera_id, source):
                     if gate_role == "entrance"
                     else f"EXIT CAM | OUT {updated_info.get('exit_count', 0)}"
                 )
-                cv2.putText(
+                _draw_text_with_background(
                     annotated_frame,
                     count_text,
                     (12, 28),
@@ -441,6 +494,8 @@ def camera_worker(camera_registry, camera_id, source):
                     0.7,
                     (0, 255, 255),
                     2,
+                    background_color=(20, 20, 20),
+                    padding=8,
                 )
             else:
                 gate_camera_runtime.pop(camera_id, None)
@@ -482,8 +537,10 @@ def load_cameras_from_db(camera_registry):
     rows = fetch_cameras()
     camera_rois = fetch_camera_rois()
     gate_configs = fetch_gate_configs()
+    gate_counter_states = fetch_gate_counter_states()
     for cam_id, name, url, group, floor in rows:
         gate_defaults = _build_gate_camera_defaults(gate_configs.get(cam_id), camera_rois.get(cam_id))
+        saved_gate_counts = gate_counter_states.get(cam_id, {})
         camera_registry.add(
             cam_id,
             {
@@ -495,6 +552,8 @@ def load_cameras_from_db(camera_registry):
                 "is_active": False,
                 "last_updated": time.time(),
                 **gate_defaults,
+                "entry_count": saved_gate_counts.get("entry_count", gate_defaults.get("entry_count", 0)),
+                "exit_count": saved_gate_counts.get("exit_count", gate_defaults.get("exit_count", 0)),
             },
         )
     for cam_id, _, url, _, _ in rows:

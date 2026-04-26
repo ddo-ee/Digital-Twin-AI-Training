@@ -362,7 +362,12 @@ img.feed    { width: 100%; display: block; }
 .close-modal:hover { color: #cf6679; }
 
 /* --- 11. DASHBOARD CARDS & FORMS --- */
-.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 20px;
+    align-items: last baseline;
+}
 .stat-card {
     background: rgba(10, 14, 26, 0.8); border: 1px solid #122226;
     border-radius: 12px; padding: 20px;
