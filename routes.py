@@ -21,6 +21,7 @@ from config import (
 )
 from database import (
     add_zone,
+    cleanup_database_history,
     delete_camera_roi,
     delete_gate_counter_state,
     delete_camera,
@@ -28,14 +29,18 @@ from database import (
     dismiss_all_anomalies,
     dismiss_anomaly,
     fetch_active_anomalies,
+    fetch_anomaly_config,
     fetch_anomaly_history,
     fetch_camera_roi,
+    fetch_database_stats,
     fetch_gate_config,
     fetch_history,
     fetch_recent_unresolved_anomalies,
     fetch_zones,
     insert_camera,
     remove_zone,
+    save_anomaly_config,
+    estimate_cleanup_database_history,
     upsert_camera_roi,
     upsert_gate_config,
     update_camera,
@@ -274,6 +279,7 @@ def register_routes(app, camera_registry):
         is_gate_camera = (request.form.get("is_gate_camera") or "").lower() == "true"
         existing_config = fetch_gate_config(camera_id)
         existing_roi = fetch_camera_roi(camera_id)
+        was_gate_camera = bool(existing_config)
 
         try:
             import json
@@ -394,9 +400,9 @@ def register_routes(app, camera_registry):
         else:
             gate_config = None
             delete_gate_config(camera_id)
-
-        camera_registry.reset_gate_totals(camera_id)
-        delete_gate_counter_state(camera_id)
+            if was_gate_camera:
+                camera_registry.reset_gate_totals(camera_id)
+                delete_gate_counter_state(camera_id)
         serialized_config = _serialize_gate_config(
             {"camera_id": camera_id, **(gate_config or {})} if gate_config else None,
             {"camera_id": camera_id, "reference_image_path": reference_image_path, "roi_points": normalized_roi_points, "roi_closed": roi_closed},
@@ -512,6 +518,110 @@ def register_routes(app, camera_registry):
                 "Content-Disposition": "attachment; filename=gate-history.csv",
             },
         )
+
+    @app.route("/api/database/stats")
+    def get_database_stats():
+        return jsonify(fetch_database_stats())
+
+    @app.route("/api/database/cleanup/estimate", methods=["POST"])
+    def estimate_database_cleanup_route():
+        payload = request.get_json(silent=True) or {}
+        action = (payload.get("action") or "").strip()
+        days_to_keep = payload.get("days_to_keep")
+
+        try:
+            estimate = estimate_cleanup_database_history(action, days_to_keep)
+            return jsonify({"status": "success", "estimate": estimate})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+
+    @app.route("/api/database/cleanup", methods=["POST"])
+    def cleanup_database_route():
+        payload = request.get_json(silent=True) or {}
+        action = (payload.get("action") or "").strip()
+        days_to_keep = payload.get("days_to_keep")
+
+        try:
+            cleanup_result = cleanup_database_history(action, days_to_keep)
+            stats = fetch_database_stats()
+            return jsonify({
+                "status": "success",
+                "cleanup": cleanup_result,
+                "stats": stats,
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+
+    @app.route("/api/anomaly_config")
+    def get_anomaly_config_route():
+        config = fetch_anomaly_config()
+        cameras = [
+            {
+                "id": cam_id,
+                "name": info.get("name", cam_id),
+                "group": info.get("group", ""),
+                "floor": info.get("floor", ""),
+                "rule_type": config["camera_rules"].get(cam_id, {}).get("rule_type", "default"),
+                "restricted_start_time": config["camera_rules"].get(cam_id, {}).get(
+                    "restricted_start_time",
+                    config["restricted_start_time"],
+                ),
+                "restricted_end_time": config["camera_rules"].get(cam_id, {}).get(
+                    "restricted_end_time",
+                    config["restricted_end_time"],
+                ),
+            }
+            for cam_id, info in sorted(
+                camera_registry.snapshot().items(),
+                key=lambda item: item[1].get("name", item[0]).lower(),
+            )
+        ]
+        return jsonify({
+            "status": "success",
+            "config": {
+                "restricted_start_time": config["restricted_start_time"],
+                "restricted_end_time": config["restricted_end_time"],
+            },
+            "cameras": cameras,
+        })
+
+    @app.route("/api/anomaly_config", methods=["POST"])
+    def save_anomaly_config_route():
+        payload = request.get_json(silent=True) or {}
+        camera_rules_payload = payload.get("camera_rules") or {}
+        camera_rules = {}
+
+        if isinstance(camera_rules_payload, list):
+            for item in camera_rules_payload:
+                if not isinstance(item, dict):
+                    continue
+                camera_id = item.get("camera_id")
+                rule_type = item.get("rule_type")
+                if rule_type in {"safe", "restricted"}:
+                    camera_rules[camera_id] = {
+                        "rule_type": rule_type,
+                        "restricted_start_time": item.get("restricted_start_time"),
+                        "restricted_end_time": item.get("restricted_end_time"),
+                    }
+        elif isinstance(camera_rules_payload, dict):
+            for camera_id, rule_config in camera_rules_payload.items():
+                if isinstance(rule_config, dict):
+                    rule_type = rule_config.get("rule_type")
+                    if rule_type in {"safe", "restricted"}:
+                        camera_rules[camera_id] = rule_config
+                elif rule_config in {"safe", "restricted"}:
+                    camera_rules[camera_id] = rule_config
+
+        try:
+            saved_config = save_anomaly_config(
+                payload.get("restricted_start_time"),
+                payload.get("restricted_end_time"),
+                camera_rules,
+            )
+            anomalies.invalidate_anomaly_config_cache()
+            return jsonify({"status": "success", "config": saved_config})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
 
     @app.route("/api/anomalies")
     def get_anomalies():

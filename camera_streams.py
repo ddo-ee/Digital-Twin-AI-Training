@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 import cv2
@@ -44,6 +45,7 @@ camera_threads = {}
 thread_run_flags = {}
 global_frame_buffer = {}
 gate_camera_runtime = {}
+PH_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def load_poly_from_txt(filename):
@@ -307,6 +309,26 @@ def analytics_logger(camera_registry):
 
 def start_analytics_logger(camera_registry):
     threading.Thread(target=analytics_logger, args=(camera_registry,), daemon=True).start()
+
+
+def _seconds_until_next_midnight():
+    now = datetime.now(PH_TIMEZONE)
+    next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max((next_midnight - now).total_seconds(), 0.5)
+
+
+def gate_day_reset_worker(camera_registry):
+    while True:
+        time.sleep(_seconds_until_next_midnight())
+
+        reset_camera_ids = camera_registry.reset_all_gate_totals()
+        for camera_id in reset_camera_ids:
+            gate_camera_runtime.pop(camera_id, None)
+            upsert_gate_counter_state(camera_id, 0, 0)
+
+
+def start_gate_day_reset_worker(camera_registry):
+    threading.Thread(target=gate_day_reset_worker, args=(camera_registry,), daemon=True).start()
 
 
 def camera_worker(camera_registry, camera_id, source):

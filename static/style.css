@@ -424,6 +424,83 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
 .history-chart-wide {
     grid-column: 1 / -1;
 }
+.database-manager-card {
+    border-color: #1f3b48;
+}
+.database-manager-header,
+.database-manager-actions {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+.database-manager-actions {
+    justify-content: flex-start;
+    margin-top: 16px;
+}
+.anomaly-config-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+}
+.anomaly-config-card {
+    margin-bottom: 0;
+}
+.anomaly-time-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+.anomaly-rule-summary {
+    color: #94a3b8;
+    font-size: 0.86rem;
+    margin-bottom: 12px;
+}
+.anomaly-camera-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: calc(100vh - 320px);
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.anomaly-camera-rule {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 12px;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid #1f3b48;
+    border-radius: 8px;
+    background: rgba(18, 34, 38, 0.45);
+}
+.anomaly-camera-name {
+    color: #f8fafc;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.anomaly-camera-meta {
+    color: #64748b;
+    font-size: 0.78rem;
+}
+.anomaly-camera-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.anomaly-custom-time-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.anomaly-custom-time-fields label {
+    display: block;
+    color: #94a3b8;
+    font-size: 0.72rem;
+    margin-bottom: 4px;
+}
 .campus-overview-card {
     grid-column: span 2;
 }
@@ -563,6 +640,11 @@ button.action-btn:hover { background: #00FFFF; transform: scale(1.02); }
         grid-template-columns: 1fr;
     }
     .history-chart-grid {
+        grid-template-columns: 1fr;
+    }
+    .anomaly-config-grid,
+    .anomaly-time-row,
+    .anomaly-camera-rule {
         grid-template-columns: 1fr;
     }
     .campus-gate-summary {

@@ -83,6 +83,19 @@ class CameraRegistry:
             self._cameras[camera_id]["exit_count"] = 0
             return True
 
+    def reset_all_gate_totals(self):
+        with self._lock:
+            reset_camera_ids = []
+            for camera_id, info in self._cameras.items():
+                if not info.get("is_gate_camera", False):
+                    continue
+
+                info["entry_count"] = 0
+                info["exit_count"] = 0
+                reset_camera_ids.append(camera_id)
+
+            return reset_camera_ids
+
     def get_gate_summary(self):
         with self._lock:
             configured_cameras = []

@@ -21,6 +21,20 @@ def _ph_today_str():
     return datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d")
 
 
+def _normalize_time_value(value, fallback):
+    if not value:
+        return fallback
+
+    normalized = str(value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            return parsed.strftime("%H:%M")
+        except ValueError:
+            continue
+    return fallback
+
+
 def _parse_history_datetime(value):
     if not value:
         return None
@@ -232,6 +246,40 @@ def init_db():
                         FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
                    )"""
             )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS anomaly_config
+                   (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        restricted_start_time TEXT DEFAULT '21:00',
+                        restricted_end_time TEXT DEFAULT '05:00',
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                   )"""
+            )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS camera_anomaly_rules
+                   (
+                        camera_id TEXT PRIMARY KEY,
+                        rule_type TEXT NOT NULL CHECK (rule_type IN ('safe', 'restricted')),
+                        restricted_start_time TEXT,
+                        restricted_end_time TEXT,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
+                   )"""
+            )
+            c.execute(
+                """
+                INSERT OR IGNORE INTO anomaly_config
+                    (id, restricted_start_time, restricted_end_time, updated_at)
+                VALUES (1, '21:00', '05:00', ?)
+                """,
+                (_ph_now_str(),),
+            )
+            c.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_zone_logs_timestamp ON zone_logs(timestamp)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_campus_logs_timestamp ON campus_logs(timestamp)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_gate_history_logs_timestamp ON gate_history_logs(timestamp)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_anomaly_logs_detected_at ON anomaly_logs(detected_at)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_camera_anomaly_rules_rule_type ON camera_anomaly_rules(rule_type)")
 
             c.execute("PRAGMA table_info(cameras)")
             camera_columns = {row[1] for row in c.fetchall()}
@@ -242,6 +290,13 @@ def init_db():
             anomaly_columns = {row[1] for row in c.fetchall()}
             if "detected_count" not in anomaly_columns:
                 c.execute("ALTER TABLE anomaly_logs ADD COLUMN detected_count INTEGER DEFAULT 0")
+
+            c.execute("PRAGMA table_info(camera_anomaly_rules)")
+            camera_anomaly_rule_columns = {row[1] for row in c.fetchall()}
+            if "restricted_start_time" not in camera_anomaly_rule_columns:
+                c.execute("ALTER TABLE camera_anomaly_rules ADD COLUMN restricted_start_time TEXT")
+            if "restricted_end_time" not in camera_anomaly_rule_columns:
+                c.execute("ALTER TABLE camera_anomaly_rules ADD COLUMN restricted_end_time TEXT")
 
             c.execute("PRAGMA table_info(gate_configs)")
             gate_config_columns = {row[1] for row in c.fetchall()}
@@ -404,6 +459,207 @@ def upsert_gate_counter_state(camera_id, entry_count, exit_count, count_date=Non
                 (camera_id, target_date, int(entry_count), int(exit_count), _ph_now_str()),
             )
             conn.commit()
+
+
+def fetch_database_stats():
+    history_tables = [
+        "logs",
+        "zone_logs",
+        "campus_logs",
+        "gate_history_logs",
+        "anomaly_logs",
+    ]
+
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            table_counts = {}
+            for table_name in history_tables:
+                c.execute(f"SELECT COUNT(*) FROM {table_name}")
+                table_counts[table_name] = int(c.fetchone()[0])
+
+    db_size_bytes = 0
+    try:
+        import os
+        db_size_bytes = os.path.getsize(DB_NAME) if os.path.exists(DB_NAME) else 0
+    except OSError:
+        db_size_bytes = 0
+
+    return {
+        "db_size_bytes": db_size_bytes,
+        "table_counts": table_counts,
+        "total_history_rows": sum(table_counts.values()),
+    }
+
+
+def fetch_anomaly_config():
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT restricted_start_time, restricted_end_time
+                FROM anomaly_config
+                WHERE id = 1
+                """
+            )
+            config_row = c.fetchone()
+            c.execute(
+                """
+                SELECT camera_id, rule_type, restricted_start_time, restricted_end_time
+                FROM camera_anomaly_rules
+                """
+            )
+            rule_rows = c.fetchall()
+
+    restricted_start_time = "21:00"
+    restricted_end_time = "05:00"
+    if config_row:
+        restricted_start_time = _normalize_time_value(config_row[0], restricted_start_time)
+        restricted_end_time = _normalize_time_value(config_row[1], restricted_end_time)
+
+    return {
+        "restricted_start_time": restricted_start_time,
+        "restricted_end_time": restricted_end_time,
+        "camera_rules": {
+            camera_id: {
+                "rule_type": rule_type,
+                "restricted_start_time": _normalize_time_value(rule_start_time, restricted_start_time),
+                "restricted_end_time": _normalize_time_value(rule_end_time, restricted_end_time),
+            }
+            for camera_id, rule_type, rule_start_time, rule_end_time in rule_rows
+            if rule_type in {"safe", "restricted"}
+        },
+    }
+
+
+def save_anomaly_config(restricted_start_time, restricted_end_time, camera_rules):
+    start_time = _normalize_time_value(restricted_start_time, "21:00")
+    end_time = _normalize_time_value(restricted_end_time, "05:00")
+    normalized_rules = []
+    for camera_id, rule_config in (camera_rules or {}).items():
+        clean_camera_id = str(camera_id or "").strip()
+        if isinstance(rule_config, dict):
+            rule_type = rule_config.get("rule_type")
+            rule_start_time = _normalize_time_value(rule_config.get("restricted_start_time"), start_time)
+            rule_end_time = _normalize_time_value(rule_config.get("restricted_end_time"), end_time)
+        else:
+            rule_type = rule_config
+            rule_start_time = start_time
+            rule_end_time = end_time
+        clean_rule_type = str(rule_type or "").strip().lower()
+        if not clean_camera_id or clean_rule_type not in {"safe", "restricted"}:
+            continue
+        if clean_rule_type == "safe":
+            rule_start_time = None
+            rule_end_time = None
+        normalized_rules.append((clean_camera_id, clean_rule_type, rule_start_time, rule_end_time, _ph_now_str()))
+
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                INSERT INTO anomaly_config
+                    (id, restricted_start_time, restricted_end_time, updated_at)
+                VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    restricted_start_time = excluded.restricted_start_time,
+                    restricted_end_time = excluded.restricted_end_time,
+                    updated_at = excluded.updated_at
+                """,
+                (start_time, end_time, _ph_now_str()),
+            )
+            c.execute("DELETE FROM camera_anomaly_rules")
+            c.executemany(
+                """
+                INSERT INTO camera_anomaly_rules
+                    (camera_id, rule_type, restricted_start_time, restricted_end_time, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                normalized_rules,
+            )
+            conn.commit()
+
+    return fetch_anomaly_config()
+
+
+def _history_timestamp_columns():
+    return {
+        "logs": "timestamp",
+        "zone_logs": "timestamp",
+        "campus_logs": "timestamp",
+        "gate_history_logs": "timestamp",
+        "anomaly_logs": "detected_at",
+    }
+
+
+def _cleanup_cutoff_for_action(action, days_to_keep=None):
+    if action == "older_than":
+        keep_days = int(days_to_keep or 0)
+        if keep_days < 1:
+            raise ValueError("days_to_keep must be at least 1")
+        return (datetime.now(PH_TIMEZONE) - timedelta(days=keep_days)).strftime("%Y-%m-%d %H:%M:%S")
+    if action == "all_history":
+        return None
+    raise ValueError("Unsupported cleanup action")
+
+
+def estimate_cleanup_database_history(action, days_to_keep=None):
+    history_timestamp_columns = {
+        **_history_timestamp_columns(),
+    }
+    cutoff = _cleanup_cutoff_for_action(action, days_to_keep)
+    estimated_counts = {}
+
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            for table_name, timestamp_column in history_timestamp_columns.items():
+                if action == "older_than":
+                    c.execute(
+                        f"SELECT COUNT(*) FROM {table_name} WHERE {timestamp_column} < ?",
+                        (cutoff,),
+                    )
+                else:
+                    c.execute(f"SELECT COUNT(*) FROM {table_name}")
+                estimated_counts[table_name] = int(c.fetchone()[0])
+
+    return {
+        "estimated_counts": estimated_counts,
+        "estimated_total": sum(estimated_counts.values()),
+        "cutoff": cutoff,
+    }
+
+
+def cleanup_database_history(action, days_to_keep=None, vacuum=True):
+    history_timestamp_columns = _history_timestamp_columns()
+    deleted_counts = {}
+    cutoff = _cleanup_cutoff_for_action(action, days_to_keep)
+
+    with db_lock:
+        with sqlite3.connect(DB_NAME, timeout=15) as conn:
+            c = conn.cursor()
+            for table_name, timestamp_column in history_timestamp_columns.items():
+                if action == "older_than":
+                    c.execute(
+                        f"DELETE FROM {table_name} WHERE {timestamp_column} < ?",
+                        (cutoff,),
+                    )
+                else:
+                    c.execute(f"DELETE FROM {table_name}")
+                deleted_counts[table_name] = c.rowcount if c.rowcount is not None else 0
+            conn.commit()
+
+        if vacuum:
+            with sqlite3.connect(DB_NAME, timeout=60) as vacuum_conn:
+                vacuum_conn.execute("VACUUM")
+
+    return {
+        "deleted_counts": deleted_counts,
+        "deleted_total": sum(deleted_counts.values()),
+        "cutoff": cutoff,
+    }
 
 
 def delete_gate_counter_state(camera_id, count_date=None):
@@ -575,6 +831,7 @@ def delete_camera(camera_id):
     with db_lock:
         with sqlite3.connect(DB_NAME, timeout=15) as conn:
             c = conn.cursor()
+            c.execute("DELETE FROM camera_anomaly_rules WHERE camera_id = ?", (camera_id,))
             c.execute("DELETE FROM cameras WHERE id = ?", (camera_id,))
             conn.commit()
 
@@ -602,11 +859,15 @@ def insert_analytics(cameras_snapshot, zone_counts, total_campus, gate_summary=N
             c = conn.cursor()
             timestamp = _ph_now_str()
             for cam_id, info in cameras_snapshot.items():
+                if not info.get("is_active", False) or int(info.get("count", 0)) <= 0:
+                    continue
                 c.execute(
                     "INSERT INTO logs (camera_id, count, timestamp) VALUES (?, ?, ?)",
                     (cam_id, info["count"], timestamp),
                 )
             for zone, count in zone_counts.items():
+                if int(count or 0) <= 0:
+                    continue
                 c.execute(
                     "INSERT INTO zone_logs (zone_name, count, timestamp) VALUES (?, ?, ?)",
                     (zone, count, timestamp),

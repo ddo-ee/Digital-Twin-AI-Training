@@ -64,7 +64,6 @@
             </div>
         </div>
     </div>
-    </div>
     <div id="gateConfigModal" class="modal" onclick="closeGateConfigModal(event)">
         <span class="close-modal" onclick="closeGateConfigModal(event)">&times;</span>
         <div class="modal-content gate-config-modal-content" onclick="event.stopPropagation()">
@@ -198,8 +197,14 @@
             <li class="menu-item"><a class="menu-link" id="nav-zones" onclick="showZones()"><div class="menu-icon"><i class="fas fa-video"></i></div><span class="menu-text">Live Viewer</span></a></li>
             
             <div class="zone-header">SYSTEM</div>
+            <li class="menu-item">
+                <a class="menu-link" id="nav-anomaly-config" onclick="showAnomalyConfig()">
+                    <div class="menu-icon"><i class="fas fa-shield-alt"></i></div>
+                    <span class="menu-text">Anomaly Configurations</span>
+                </a>
+            </li>
             <li class="menu-item" id="manage-drop">
-                <a class="menu-link" onclick="toggleDropdown('manage-drop')"><div class="menu-icon"><i class="fas fa-sliders-h"></i></div><span class="menu-text">Manage Streams</span><i class="fas fa-chevron-down dropdown-arrow"></i></a>
+                <a class="menu-link" onclick="toggleDropdown('manage-drop')"><div class="menu-icon"><i class="fas fa-sliders-h"></i></div><span class="menu-text">Add Streams</span><i class="fas fa-chevron-down dropdown-arrow"></i></a>
                 <div class="dropdown-content">
                     <form action="/add_camera" method="POST">
                         <input type="text" name="camera_name" placeholder="Location Name" required>
@@ -219,7 +224,7 @@
             <li class="menu-item" id="manage-zone-drop">
                 <a class="menu-link" onclick="toggleDropdown('manage-zone-drop')">
                     <div class="menu-icon"><i class="fas fa-plus-square"></i></div>
-                    <span class="menu-text">Manage Zones</span>
+                    <span class="menu-text">Add Zones</span>
                     <i class="fas fa-chevron-down dropdown-arrow"></i>
                 </a>
                 <div class="dropdown-content">
@@ -310,6 +315,35 @@
                         </div>
                         <p style="color:#64748b; font-size:0.82rem; margin:10px 0 0;">Historical charts on the dashboard always show the last 24 hours. The range selector is used only for downloads.</p>
                     </div>
+                    <div class="chart-wrapper database-manager-card">
+                        <div class="database-manager-header">
+                            <div>
+                                <h3 style="color:#8be9fd; margin:0 0 6px;">Database Management</h3>
+                                <p id="databaseStatsText" style="color:#94a3b8; font-size:0.86rem; margin:0;">Loading database usage...</p>
+                            </div>
+                            <button onclick="loadDatabaseStats()" style="background:#222; color:#8be9fd; border:1px solid #8be9fd; padding:9px 13px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Refresh
+                            </button>
+                        </div>
+                        <div class="database-manager-actions">
+                            <div>
+                                <label style="display:block; color:#94a3b8; font-size:0.8rem; margin-bottom:6px;">Keep Selected History</label>
+                                <select id="databaseRetentionSelect" class="gate-config-input" style="min-width:180px;">
+                                    <option value="7">Last 7 Days</option>
+                                    <option value="14">Last 14 Days</option>
+                                    <option value="30" selected>Last 30 Days</option>
+                                    <option value="60">Last 60 Days</option>
+                                </select>
+                            </div>
+                            <button onclick="cleanupDatabaseOlderThan()" style="background:#222; color:#ffb86c; border:1px solid #ffb86c; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Keep Selected History
+                            </button>
+                            <button onclick="cleanupAllDatabaseHistory()" style="background:#2a1118; color:#cf6679; border:1px solid #cf6679; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                                Delete All History
+                            </button>
+                        </div>
+                        <p style="color:#64748b; font-size:0.82rem; margin:10px 0 0;">Keeping selected history will retain data for the specified period. Cameras, zones, ROI, gate setup, gate counters are also kept.</p>
+                    </div>
                     <div class="history-chart-grid">
                         <div class="chart-wrapper">
                             <h3 style="color: #03dac6; margin-top: 0;">Campus Overview: Entrance</h3>
@@ -323,6 +357,41 @@
                             <h3 style="color: #ffb86c; margin-top: 0;">Campus Overview: Total Inside Campus</h3>
                             <canvas id="campusInsideChart" height="110"></canvas>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="anomaly-config-view" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; padding-bottom:10px; margin-bottom:20px; gap:12px; flex-wrap:wrap;">
+                    <div>
+                        <h3 style="margin:0;">Anomaly Configurations</h3>
+                        <p style="color:#94a3b8; font-size:0.86rem; margin:6px 0 0;">Unconfigured cameras trigger anomalies whenever people are detected. Safe cameras never trigger. Time restricted cameras use the window below.</p>
+                    </div>
+                    <button onclick="saveAnomalyConfig()" style="background:#03dac6; border:none; color:black; padding:10px 16px; border-radius:6px; cursor:pointer; font-weight:bold;">
+                        Save Configuration
+                    </button>
+                </div>
+
+                <div class="anomaly-config-grid">
+                    <div class="chart-wrapper anomaly-config-card">
+                        <h3 style="color:#03dac6; margin-top:0;">Default Restricted Time Window</h3>
+                        <div class="anomaly-time-row">
+                            <div>
+                                <label style="display:block; color:#94a3b8; font-size:0.8rem; margin-bottom:6px;">Start Time</label>
+                                <input type="time" id="anomalyRestrictedStartInput" class="gate-config-input">
+                            </div>
+                            <div>
+                                <label style="display:block; color:#94a3b8; font-size:0.8rem; margin-bottom:6px;">End Time</label>
+                                <input type="time" id="anomalyRestrictedEndInput" class="gate-config-input">
+                            </div>
+                        </div>
+                        <p style="color:#64748b; font-size:0.82rem; margin:12px 0 0;">Every unconfigured camera uses this window. Safe cameras never trigger, and custom cameras can override this window.</p>
+                    </div>
+
+                    <div class="chart-wrapper anomaly-config-card">
+                        <h3 style="color:#ffb86c; margin-top:0;">Camera Rules</h3>
+                        <div class="anomaly-rule-summary" id="anomalyRuleSummary">Loading camera rules...</div>
+                        <div id="anomalyCameraRulesList" class="anomaly-camera-list"></div>
                     </div>
                 </div>
             </div>
@@ -516,6 +585,181 @@
         function closeModal() {
             activeModalCamId = null;
             document.getElementById("videoModal").classList.remove("show");
+        }
+
+        // --- ANOMALY CONFIGURATION MANAGER ---
+        let anomalyConfigLoaded = false;
+
+        function showAnomalyConfig() {
+            switchView('anomaly-config');
+            document.getElementById('page-title').innerText = "Manage Anomaly Configurations";
+            document.getElementById('nav-anomaly-config').classList.add('active');
+            document.querySelectorAll('.cam-feed').forEach(img => img.src = "");
+            loadAnomalyConfig();
+        }
+
+        function formatAnomalyRuleSummary(cameras) {
+            const totals = { default: 0, restricted: 0, safe: 0 };
+            cameras.forEach(camera => {
+                const ruleType = camera.rule_type || 'default';
+                totals[ruleType] = (totals[ruleType] || 0) + 1;
+            });
+            return `Default window: ${totals.default || 0} | Custom window: ${totals.restricted || 0} | Safe: ${totals.safe || 0}`;
+        }
+
+        function createAnomalyRuleSelect(camera) {
+            const select = document.createElement('select');
+            select.className = 'gate-config-input anomaly-rule-select';
+            select.dataset.cameraId = camera.id;
+
+            [
+                ['default', 'Default Restricted Window'],
+                ['restricted', 'Custom Restricted Window'],
+                ['safe', 'Safe Camera'],
+            ].forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                select.appendChild(option);
+            });
+
+            select.value = camera.rule_type || 'default';
+            select.addEventListener('change', () => {
+                updateAnomalyRuleRow(select.closest('.anomaly-camera-rule'));
+                updateAnomalyRuleSummary();
+            });
+            return select;
+        }
+
+        function createAnomalyTimeOverride(camera) {
+            const fields = document.createElement('div');
+            fields.className = 'anomaly-custom-time-fields';
+            fields.innerHTML = `
+                <div>
+                    <label>Start</label>
+                    <input type="time" class="gate-config-input anomaly-start-time" value="${camera.restricted_start_time || '21:00'}">
+                </div>
+                <div>
+                    <label>End</label>
+                    <input type="time" class="gate-config-input anomaly-end-time" value="${camera.restricted_end_time || '05:00'}">
+                </div>
+            `;
+            return fields;
+        }
+
+        function updateAnomalyRuleRow(row) {
+            if (!row) return;
+            const select = row.querySelector('.anomaly-rule-select');
+            const fields = row.querySelector('.anomaly-custom-time-fields');
+            if (!select || !fields) return;
+            fields.style.display = select.value === 'restricted' ? 'grid' : 'none';
+        }
+
+        function renderAnomalyCameraRules(cameras) {
+            const list = document.getElementById('anomalyCameraRulesList');
+            list.innerHTML = '';
+
+            if (!cameras.length) {
+                const empty = document.createElement('p');
+                empty.style.color = '#64748b';
+                empty.textContent = 'No cameras configured yet.';
+                list.appendChild(empty);
+                return;
+            }
+
+            cameras.forEach(camera => {
+                const row = document.createElement('div');
+                row.className = 'anomaly-camera-rule';
+
+                const info = document.createElement('div');
+                const name = document.createElement('div');
+                name.className = 'anomaly-camera-name';
+                name.textContent = camera.name;
+                const meta = document.createElement('div');
+                meta.className = 'anomaly-camera-meta';
+                meta.textContent = [camera.group, camera.floor].filter(Boolean).join(' | ') || camera.id;
+                info.appendChild(name);
+                info.appendChild(meta);
+
+                row.appendChild(info);
+                const controls = document.createElement('div');
+                controls.className = 'anomaly-camera-controls';
+                controls.appendChild(createAnomalyRuleSelect(camera));
+                controls.appendChild(createAnomalyTimeOverride(camera));
+                row.appendChild(controls);
+                list.appendChild(row);
+                updateAnomalyRuleRow(row);
+            });
+        }
+
+        function updateAnomalyRuleSummary() {
+            const cameras = Array.from(document.querySelectorAll('.anomaly-rule-select')).map(select => ({
+                rule_type: select.value || 'default',
+            }));
+            document.getElementById('anomalyRuleSummary').innerText = formatAnomalyRuleSummary(cameras);
+        }
+
+        async function loadAnomalyConfig() {
+            const summaryEl = document.getElementById('anomalyRuleSummary');
+            if (summaryEl) summaryEl.innerText = 'Loading camera rules...';
+
+            try {
+                const response = await fetch('/api/anomaly_config');
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    showSystemAlert('Load Failed', data.message || 'Unable to load anomaly configuration.');
+                    return;
+                }
+
+                document.getElementById('anomalyRestrictedStartInput').value = data.config.restricted_start_time || '21:00';
+                document.getElementById('anomalyRestrictedEndInput').value = data.config.restricted_end_time || '05:00';
+                renderAnomalyCameraRules(data.cameras || []);
+                updateAnomalyRuleSummary();
+                anomalyConfigLoaded = true;
+            } catch (error) {
+                console.error('Anomaly config load failed', error);
+                showSystemAlert('Load Failed', 'Failed to load anomaly configuration.');
+            }
+        }
+
+        async function saveAnomalyConfig() {
+            const cameraRules = {};
+            document.querySelectorAll('.anomaly-rule-select').forEach(select => {
+                const row = select.closest('.anomaly-camera-rule');
+                if (select.value === 'safe') {
+                    cameraRules[select.dataset.cameraId] = { rule_type: 'safe' };
+                } else if (select.value === 'restricted') {
+                    cameraRules[select.dataset.cameraId] = {
+                        rule_type: 'restricted',
+                        restricted_start_time: row.querySelector('.anomaly-start-time')?.value || '',
+                        restricted_end_time: row.querySelector('.anomaly-end-time')?.value || '',
+                    };
+                }
+            });
+
+            try {
+                const response = await fetch('/api/anomaly_config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        restricted_start_time: document.getElementById('anomalyRestrictedStartInput').value,
+                        restricted_end_time: document.getElementById('anomalyRestrictedEndInput').value,
+                        camera_rules: cameraRules,
+                    }),
+                });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    showSystemAlert('Save Failed', data.message || 'Unable to save anomaly configuration.');
+                    return;
+                }
+
+                showSystemAlert('Configuration Saved', 'Anomaly rules were saved successfully.');
+                anomalyConfigLoaded = false;
+                await loadAnomalyConfig();
+            } catch (error) {
+                console.error('Anomaly config save failed', error);
+                showSystemAlert('Save Failed', 'Failed to save anomaly configuration.');
+            }
         }
 
         // --- 1. SHOW ZONES DIRECTORY ---
@@ -825,7 +1069,7 @@
         let largeChartInstance  = null;
         let chartUpdateTimer    = null;
         const DISPLAY_HISTORY_RANGE = '24h';
-        const HISTORICAL_CHART_REFRESH_INTERVAL_MS = {{ historical_chart_refresh_interval_ms|int }};
+        const HISTORICAL_CHART_REFRESH_INTERVAL_MS = Number("{{ historical_chart_refresh_interval_ms|int }}");
 
         function onHistoryRangeChange() {
             const isCustom = document.getElementById('historyRangeSelect').value === 'custom';
@@ -954,8 +1198,9 @@
                             ticks: {
                                 color: '#888',
                                 autoSkip: false,
-                                maxRotation: slantedTicks ? 35 : 0,
-                                minRotation: slantedTicks ? 35 : 0,
+                                maxRotation: slantedTicks ? 50 : 0,
+                                minRotation: slantedTicks ? 50 : 0,
+                                padding: slantedTicks ? 10 : 3,
                                 callback: function(value) {
                                     const tickLabel = this.getLabelForValue(value);
                                     if (!tickLabel) return '';
@@ -986,6 +1231,7 @@
             }
 
             const labelMode = getHistoryLabelMode(rangeValue, exportData.labels);
+            const shouldSlantExportTicks = labelMode === 'hour' || labelMode === 'day';
             const gateHistory = exportData.gate_history || { in: [], out: [], inside: [] };
             const exportSources = [
                 {
@@ -994,7 +1240,7 @@
                     color: '#03dac6',
                     backgroundColor: 'rgba(3, 218, 198, 0.12)',
                     values: gateHistory.in,
-                    slantedTicks: labelMode === 'hour',
+                    slantedTicks: shouldSlantExportTicks,
                 },
                 {
                     title: 'Campus Overview: Exit',
@@ -1002,7 +1248,7 @@
                     color: '#cf6679',
                     backgroundColor: 'rgba(207, 102, 121, 0.12)',
                     values: gateHistory.out,
-                    slantedTicks: labelMode === 'hour',
+                    slantedTicks: shouldSlantExportTicks,
                 },
                 {
                     title: 'Campus Population Trend',
@@ -1010,12 +1256,12 @@
                     color: '#ffb86c',
                     backgroundColor: 'rgba(255, 184, 108, 0.14)',
                     values: gateHistory.inside,
-                    slantedTicks: false,
+                    slantedTicks: shouldSlantExportTicks,
                 },
             ];
 
             const renderedCharts = exportSources.map((source) => {
-                const canvas = createExportSourceCanvas(1200, 320);
+                const canvas = createExportSourceCanvas(1400, shouldSlantExportTicks ? 380 : 320);
                 const ctx = canvas.getContext('2d');
                 const chart = new Chart(
                     ctx,
@@ -1101,6 +1347,113 @@
             }, 300);
         }
 
+        function formatDatabaseBytes(bytes) {
+            const numericBytes = Number(bytes || 0);
+            if (numericBytes < 1024) return `${numericBytes} B`;
+
+            const units = ['KB', 'MB', 'GB'];
+            let value = numericBytes / 1024;
+            let unitIndex = 0;
+            while (value >= 1024 && unitIndex < units.length - 1) {
+                value = value / 1024;
+                unitIndex += 1;
+            }
+            return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+        }
+
+        function formatDatabaseStats(stats) {
+            if (!stats) return 'Database usage unavailable.';
+
+            const tableCounts = stats.table_counts || {};
+            return [
+                `Size: ${formatDatabaseBytes(stats.db_size_bytes)}`,
+                `History rows: ${Number(stats.total_history_rows || 0).toLocaleString()}`,
+                `Gate history: ${Number(tableCounts.gate_history_logs || 0).toLocaleString()}`,
+                `Anomalies: ${Number(tableCounts.anomaly_logs || 0).toLocaleString()}`,
+            ].join(' | ');
+        }
+
+        async function loadDatabaseStats() {
+            const statsEl = document.getElementById('databaseStatsText');
+            if (!statsEl) return;
+
+            try {
+                const response = await fetch('/api/database/stats');
+                const stats = await response.json();
+                statsEl.innerText = formatDatabaseStats(stats);
+            } catch (error) {
+                console.error('Database stats load failed', error);
+                statsEl.innerText = 'Database usage unavailable.';
+            }
+        }
+
+        async function runDatabaseCleanup(payload, confirmationMessage) {
+            if (!confirm(confirmationMessage)) return;
+
+            const statsEl = document.getElementById('databaseStatsText');
+            if (statsEl) statsEl.innerText = 'Cleaning database and compacting file...';
+
+            try {
+                const response = await fetch('/api/database/cleanup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    showSystemAlert('Cleanup Failed', data.message || 'Unable to clean database history.');
+                    await loadDatabaseStats();
+                    return;
+                }
+
+                if (statsEl) statsEl.innerText = formatDatabaseStats(data.stats);
+                const deletedTotal = Number(data.cleanup?.deleted_total || 0).toLocaleString();
+                showSystemAlert('Cleanup Complete', `Deleted ${deletedTotal} history rows and compacted the database file.`);
+                await loadCharts(true);
+            } catch (error) {
+                console.error('Database cleanup failed', error);
+                showSystemAlert('Cleanup Failed', 'Failed to clean database history.');
+                await loadDatabaseStats();
+            }
+        }
+
+        async function estimateDatabaseCleanup(payload) {
+            try {
+                const response = await fetch('/api/database/cleanup/estimate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                return data.status === 'success' ? data.estimate : null;
+            } catch (error) {
+                console.error('Database cleanup estimate failed', error);
+                return null;
+            }
+        }
+
+        async function cleanupDatabaseOlderThan() {
+            const daysToKeep = Number(document.getElementById('databaseRetentionSelect').value || 30);
+            const payload = { action: 'older_than', days_to_keep: daysToKeep };
+            const estimate = await estimateDatabaseCleanup(payload);
+            const deleteCount = Number(estimate?.estimated_total || 0).toLocaleString();
+            const cutoffText = estimate?.cutoff || 'the selected cutoff';
+            runDatabaseCleanup(
+                payload,
+                `Keep the last ${daysToKeep} days of analytics and anomaly history?\n\nThis will delete ${deleteCount} rows older than ${cutoffText}. Camera setup and current counters will be kept.`
+            );
+        }
+
+        async function cleanupAllDatabaseHistory() {
+            const payload = { action: 'all_history' };
+            const estimate = await estimateDatabaseCleanup(payload);
+            const deleteCount = Number(estimate?.estimated_total || 0).toLocaleString();
+            runDatabaseCleanup(
+                payload,
+                `Delete all analytics and anomaly history?\n\nThis will delete ${deleteCount} rows. Camera setup and current counters will be kept.`
+            );
+        }
+
         function formatHistoryAxisHour(label) {
             if (!label) return '';
 
@@ -1123,11 +1476,27 @@
             return formatHistoryAxisHour(label);
         }
 
+        function isHistoryBoundaryTimestamp(label, labelMode = 'hour') {
+            if (!label) return false;
+
+            const parts = label.split(' ');
+            if (parts.length < 2) return false;
+
+            const timePart = parts[1];
+            if (labelMode === 'day') {
+                return timePart === '00:00:00';
+            }
+
+            const timeSegments = timePart.split(':');
+            return timeSegments.length >= 3 && timeSegments[1] === '00' && timeSegments[2] === '00';
+        }
+
         function shouldShowHistoryBoundaryLabel(labels, index, labelMode = 'hour') {
             if (!Array.isArray(labels) || index < 0 || index >= labels.length) return false;
 
             const currentLabel = labels[index];
             if (!currentLabel) return false;
+            if (!isHistoryBoundaryTimestamp(currentLabel, labelMode)) return false;
             if (index === 0) return true;
 
             const previousLabel = labels[index - 1];
@@ -1152,6 +1521,7 @@
                 document.getElementById('dashboard-stats').style.display  = 'none';
                 document.getElementById('dashboard-charts').style.display = 'block';
                 loadCharts(true);
+                loadDatabaseStats();
                 if (chartUpdateTimer) clearInterval(chartUpdateTimer);
                 chartUpdateTimer = setInterval(() => loadCharts(false), HISTORICAL_CHART_REFRESH_INTERVAL_MS);
             }
