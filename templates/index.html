@@ -167,6 +167,29 @@
             </div>
         </div>
     </div>
+    <div id="deleteCameraModal" class="modal" onclick="closeDeleteCameraModal(event)">
+        <span class="close-modal" onclick="closeDeleteCameraModal(event)">&times;</span>
+        <div class="modal-content" style="background: #1e1e1e; padding: 25px; width: 90%; max-width: 400px; border-color: #cf6679; cursor: default;" onclick="event.stopPropagation()">
+            <h2 style="color: #cf6679; margin-top: 0; margin-bottom: 15px;"><i class="fas fa-exclamation-triangle"></i> Delete Camera</h2>
+            
+            <p style="color: #e0e0e0; font-size: 1rem; line-height: 1.5; margin-bottom: 10px;">
+                Are you sure you want to delete the <strong id="deleteCameraNameDisplay" style="color: #bb86fc;"></strong> camera?
+            </p>
+            <p style="color: #888; font-size: 0.85rem; margin-bottom: 25px;">
+                This removes the stream and its saved camera setup from the system.
+            </p>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #333; padding-top: 20px;">
+                <button onclick="closeDeleteCameraModal()" style="background: transparent; border: 1px solid #888; color: #888; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;" onmouseover="this.style.color='#fff'; this.style.borderColor='#fff'" onmouseout="this.style.color='#888'; this.style.borderColor='#888'">
+                    Cancel
+                </button>
+                
+                <button onclick="confirmDeleteCamera()" style="background: #cf6679; border: none; color: black; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                    Delete Camera
+                </button>
+            </div>
+        </div>
+    </div>
     <div id="systemAlertModal" class="modal" onclick="closeSystemAlert(event)">
         <span class="close-modal" onclick="closeSystemAlert(event)">&times;</span>
         <div class="modal-content" style="background: #1e1e1e; padding: 25px; width: 90%; max-width: 400px; border-color: #ffb86c; cursor: default;" onclick="event.stopPropagation()">
@@ -206,7 +229,7 @@
             <li class="menu-item" id="manage-drop">
                 <a class="menu-link" onclick="toggleDropdown('manage-drop')"><div class="menu-icon"><i class="fas fa-sliders-h"></i></div><span class="menu-text">Add Streams</span><i class="fas fa-chevron-down dropdown-arrow"></i></a>
                 <div class="dropdown-content">
-                    <form action="/add_camera" method="POST">
+                    <form action="/add_camera" method="POST" onsubmit="rememberAddCameraDestination(this)">
                         <input type="text" name="camera_name" placeholder="Location Name" required>
                         <input type="text" name="camera_url" placeholder="RTSP Link or '0'" required>
                         <select name="camera_group" id="addCamZoneSelect" onchange="updateAddCamFloorOptions()">
@@ -228,8 +251,8 @@
                     <i class="fas fa-chevron-down dropdown-arrow"></i>
                 </a>
                 <div class="dropdown-content">
-                    <form action="/add_zone" method="POST">
-                        <input type="text" name="zone_name" placeholder="New Building Name" required>
+                    <form action="/add_zone" method="POST" onsubmit="rememberNavigationState('zones')">
+                        <input type="text" name="zone_name" placeholder="New Zone Name" required>
                         <button type="submit" class="action-btn" style="background: #03dac6;">Create Zone</button>
                     </form>
                 </div>
@@ -587,10 +610,36 @@
             document.getElementById("videoModal").classList.remove("show");
         }
 
+        function rememberNavigationState(viewName, zoneName = '') {
+            sessionStorage.setItem('apolloLastView', viewName || 'dashboard');
+            sessionStorage.setItem('apolloLastZone', zoneName || '');
+        }
+
+        function rememberAddCameraDestination(form) {
+            const zoneName = form?.querySelector('[name="camera_group"]')?.value || '';
+            rememberNavigationState(zoneName ? 'live' : 'zones', zoneName);
+        }
+
+        function restoreNavigationState() {
+            const lastView = sessionStorage.getItem('apolloLastView') || 'dashboard';
+            const lastZone = sessionStorage.getItem('apolloLastZone') || '';
+
+            if (lastView === 'live' && lastZone) {
+                viewZone(lastZone);
+            } else if (lastView === 'zones') {
+                showZones();
+            } else if (lastView === 'anomaly-config') {
+                showAnomalyConfig();
+            } else {
+                switchView('dashboard');
+            }
+        }
+
         // --- ANOMALY CONFIGURATION MANAGER ---
         let anomalyConfigLoaded = false;
 
         function showAnomalyConfig() {
+            rememberNavigationState('anomaly-config');
             switchView('anomaly-config');
             document.getElementById('page-title').innerText = "Manage Anomaly Configurations";
             document.getElementById('nav-anomaly-config').classList.add('active');
@@ -764,6 +813,7 @@
 
         // --- 1. SHOW ZONES DIRECTORY ---
         function showZones() {
+            rememberNavigationState('zones');
             switchView('zones');
             document.getElementById('page-title').innerText = "Live Viewer: Area Selection";
             document.getElementById('nav-zones').classList.add('active');
@@ -776,6 +826,7 @@
         let currentZoneCards = [];
 
         function viewZone(zoneName) {
+            rememberNavigationState('live', zoneName);
             switchView('live');
             document.getElementById('page-title').innerText = "Live Viewer: " + zoneName;
             document.getElementById('nav-zones').classList.add('active');
@@ -845,6 +896,7 @@
             document.querySelectorAll('.menu-link').forEach(el => el.classList.remove('active'));
             document.getElementById(viewName + '-view').classList.add('active');
             if (viewName === 'dashboard') {
+                rememberNavigationState('dashboard');
                 document.getElementById('page-title').innerText = "Campus Dashboard";
                 document.getElementById('nav-dashboard').classList.add('active');
                 document.querySelectorAll('.cam-feed').forEach(img => img.src = "");
@@ -857,6 +909,23 @@
             item.querySelector('.dropdown-content').classList.toggle('show');
         }
 
+        function updateFeedButtonState(camId, isActive) {
+            const btn = document.getElementById(`btn-${camId}`);
+            if (!btn) return;
+
+            if (isActive) {
+                btn.innerText = "Stop Feed";
+                btn.style.background = "#cf6679";
+                btn.style.color = "black";
+                btn.style.borderColor = "#cf6679";
+            } else {
+                btn.innerText = "Start Feed";
+                btn.style.background = "#333";
+                btn.style.color = "#03dac6";
+                btn.style.borderColor = "#03dac6";
+            }
+        }
+
         // --- 4. TOGGLE AI ON/OFF FOR SINGLE CAMERA ---
         async function toggleAI(camId) {
             const btn = document.getElementById(`btn-${camId}`);
@@ -864,17 +933,7 @@
             try {
                 const res  = await fetch(`/api/toggle/${camId}`, { method: 'POST' });
                 const data = await res.json();
-                if (data.is_active) {
-                    btn.innerText = "Stop Feed";
-                    btn.style.background   = "#cf6679";
-                    btn.style.color        = "black";
-                    btn.style.borderColor  = "#cf6679";
-                } else {
-                    btn.innerText = "Start Feed";
-                    btn.style.background   = "#333";
-                    btn.style.color        = "#03dac6";
-                    btn.style.borderColor  = "#03dac6";
-                }
+                updateFeedButtonState(camId, data.is_active);
             } catch (error) {
                 console.error("Toggle failed", error);
                 btn.innerText = "Error";
@@ -936,6 +995,7 @@
                     const badge     = document.getElementById(`count-live-${camId}`);
                     const nameSpan  = document.getElementById(`name-live-${camId}`);
                     const timerSpan = document.getElementById(`timer-live-${camId}`);
+                    updateFeedButtonState(camId, info.is_active);
 
                     if (badge) {
                         badge.innerText = info.is_gate_camera
@@ -1580,8 +1640,8 @@
         }
 
         window.onload = () => { 
-            switchView('dashboard');
             updateAddCamFloorOptions();
+            restoreNavigationState();
         };
 
         // ══════════════════════════════════════════════
@@ -1727,6 +1787,7 @@
 
         // --- 10. CAMERA SETTINGS MODAL LOGIC ---
         let activeSettingsCamId = null;
+        let activeCameraToDelete = null;
 
         function openCamSettings(camId) {
             activeSettingsCamId = camId;
@@ -1778,6 +1839,7 @@
                     
                     if (data.status === 'success') {
                         if (data.new_zone !== currentZone) {
+                            rememberNavigationState('live', data.new_zone);
                             window.location.reload();
                         } else {
                             nameSpan.innerText = data.new_name;
@@ -1802,9 +1864,24 @@
 
         function deleteCamFromSettings() {
             if (!activeSettingsCamId) return;
-            if (confirm("Are you sure you want to permanently delete this camera stream?")) {
-                window.location.href = `/remove_camera/${activeSettingsCamId}`;
-            }
+            activeCameraToDelete = activeSettingsCamId;
+            const currentName = document.getElementById(`name-live-${activeCameraToDelete}`)?.innerText || activeCameraToDelete;
+            document.getElementById('deleteCameraNameDisplay').innerText = currentName;
+            document.getElementById('camSettingsModal').classList.remove('show');
+            document.getElementById('deleteCameraModal').classList.add('show');
+        }
+
+        function closeDeleteCameraModal(e) {
+            if (e && e.target.id !== 'deleteCameraModal' && !e.target.classList.contains('close-modal')) return;
+            document.getElementById('deleteCameraModal').classList.remove('show');
+            activeCameraToDelete = null;
+        }
+
+        function confirmDeleteCamera() {
+            if (!activeCameraToDelete) return;
+            const card = document.getElementById(`cam-card-${activeCameraToDelete}`);
+            rememberNavigationState('live', card?.getAttribute('data-group') || '');
+            window.location.href = `/remove_camera/${activeCameraToDelete}`;
         }
 
         function formatGateBadge(info) {
@@ -2209,6 +2286,7 @@
                 const data = await res.json();
                 
                 if (data.status === 'success') {
+                    rememberNavigationState('zones');
                     window.location.reload();
                 } else {
                     alert("Error deleting zone: " + data.message);
