@@ -28,7 +28,7 @@ body::before {
     display: flex; align-items: center; padding: 20px;
     border-bottom: 1px solid rgba(255,255,255,0.05); white-space: nowrap;
 }
-.sidebar-logo { width: 40px; height: auto; margin-right: 15px; }
+.sidebar-logo { width: 60px; height: auto; margin-right: 15px; }
 .header-text { display: flex; flex-direction: column; justify-content: center; line-height: 1.2; }
 .main-title { font-size: 1.7rem; font-weight: bold; color: #e0e0e0; letter-spacing: 0.5px; }
 .sub-title { font-size: 0.75rem; color: #00D4FF; text-transform: uppercase; letter-spacing: 1px; }
