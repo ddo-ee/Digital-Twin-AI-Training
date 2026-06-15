@@ -106,14 +106,14 @@ def _history_query_args():
 def register_routes(app, camera_registry):
     @app.before_request
     def require_login():
-        allowed_endpoints = {"login", "logout", "static"}
-        if request.endpoint in allowed_endpoints or request.path == "/login":
-            return None
+        # allowed_endpoints = {"login", "logout", "static"}
+        # if request.endpoint in allowed_endpoints or request.path == "/login":
+        #     return None
 
-        if request.path == "/":
-            if session.get("authenticated"):
-                return None
-            return redirect(url_for("login", next=request.path))
+        # if request.path == "/":
+        #     if session.get("authenticated"):
+        #         return None
+        #     return redirect(url_for("login", next=request.path))
 
         return None
 

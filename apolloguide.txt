@@ -1,0 +1,25 @@
+To run the Command center of APPOLLO, we first open a terminal from the root folder where all the code lives etc etc.
+
+Upon doing so, run python command on to cctv_manager.py to execute the program. After this a message containing the link of the address you need to open the program in a browser. Or you can just get the device's IP address then add ':5000" as the program will run on port 5000 of your local device
+
+Once the program is running, you will be faced with the dashboard, or the default page.  This page contains buttons to run all cameras. and Upon clicking it, all zones with cameras added into it will simultaneously run all at the same time. Though you may manually start and stop them through their dedicated start/stop button
+
+
+Beside it is the Start University Gate Cameras button, which will specifically start all cameras in the university gate only. 
+Aside from the numbers displayed on the default dashboard, historical charts display also lives in the default dashboard. 
+There we can see the Count of Entrances, exits, and total counts inside the campus on a 24 hour time frame. 
+
+These charts are also downloadable through the download card which the user can pick the range from minimum of 7 days up to all data existing in the database, or a custom range. Upon choosing the range the user can click the refresh button to update the chart before downloading, The user may choose to download only the csv file which includes only the numbers, or download the graph which displays graphical representation of the number or to download both.
+
+Another feature for the historical charts, is the Database management where the admin/user can choose a range from 7 days to to 60 days to keep the selected range of data. or they can just delete all data by clicking the deleted button.
+
+
+On the live viewer tab lives all the zones, which groups all the cameras per area. Each zone consist of all the cameras added or existing on that zones.  Once you open a zone you will see each cameras where you can start each camera feed manually and view them full. You can also configure each camera through the settings button. You can configure its name, assigned zone and floor classification. 
+
+As for the University gate cameras zone, You can configure a camera by clicking the  settings button then going to configure ROI/gate button. This configurations has 2 purpose one is for configuring the gate ROI, or just a normal ROI for the camera. You need to upload a reference image where you can plot points for the ROI, upon uploading you will plot points based on your preference through the ROI mode button, then if its a camera gate you will also plot a separator through the separator mode.  Don't forget to check the enable gate coutner checkbox to include this camera as a gate cameras for counting entrances and exits. Then choose camera role entrance camera or exit. Then the direction of entry. 
+
+Next is the Anomaly configuration Tab - this tab is  where you can set the rules for when an anomaly should trigger specifically the time rules. through the bell button on the upper right anomaly alerts will show and a dismiss button to dismiss all alerts.  By default all cameras follow the default restricted time window which can be configured based on your preference. You can either mannualy type it or click the input box to show a dropdown for time. You can choose what type of rules each camera will follow whther it be the default restricted window or a custom one where you customize the time for the chosen camera.  Or a safe camera to prevent it from triggering an anomaly alert. After doing everything you need to save the configurations done to save it in the database.
+
+
+Next is adding a stream. where you need to input the location name of the camera, its rtsp link,  it zone, and its floor classification. Then hit add stream. After this you will be brough to the live viewer tab and the specific zone you added the camera is. There you can also delete it through the settings button. 
+Next is add zones. Adding zones you just need to input a zone name and the zone will be visble on the live viewer tab. On this tab you can also delete a zone. Note that any cameras inside a zone that was deleted will be moved to unassigned zone for final checking before permanent deletion
